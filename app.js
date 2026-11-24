@@ -354,8 +354,9 @@
       </select>` : '';
     const det = L && L.detected ? L.detected : {};
     let box = '';
+    const ncrNote = det.ncrAligned ? `<br><small>Within Metro Manila — province set to ${esc(L.match.prov)}, ${esc(draft.partner)}'s NCR province (GPS district: ${esc(det.gridProv)}).</small>` : '';
     const nearNote = det.mappedBy === 'nearest' ? `<br><small>GPS town “${esc(det.city)}” is not in GRID, so it was matched to the nearest GRID municipality (${esc(det.distanceKm)} km away).</small>` : '';
-    if (st === 'OK') box = `<div class="notice ok"><b>✓ Location verified</b>${esc(L.match.muni)}, ${esc(L.match.prov)} is within ${esc(draft.partner)}'s coverage.${nearNote}
+    if (st === 'OK') box = `<div class="notice ok"><b>✓ Location verified</b>${esc(L.match.muni)}, ${esc(L.match.prov)} is within ${esc(draft.partner)}'s coverage.${ncrNote}${nearNote}
       <br><small>You can change the municipality below if needed (${esc(draft.partner)}'s municipalities in this province).</small></div>`;
     else if (st === 'CONFIRM_MUNI') box = `<div class="notice warn"><b>Please confirm the municipality</b>GPS shows <b style="display:inline">${esc(det.city || det.gridMuni)}</b>, which is not in ${esc(draft.partner)}'s assigned municipalities for ${esc(/^NCR|^MANILA$/i.test(det.gridProv || '') ? 'Metro Manila' : det.gridProv)}. Choose the correct one below.${nearNote}</div>`;
     else if (st === 'OUT_OF_COVERAGE') box = `<div class="notice bad"><b>✗ Cannot proceed</b>This location (${esc(det.city)}, ${esc(det.gridProv || det.province)}) is not within the coverage of ${esc(draft.partner)}.
@@ -604,23 +605,78 @@
       drawMyRequests();
     } catch (e) { if (!myReqs && $('#myReq')) $('#myReq').innerHTML = '<p class="hint">Could not load your requests.</p>'; }
   }
+  const GROUPS = [
+    { k: 'process',  label: 'On Process', cls: 'g-process',  st: ['FOR APPROVAL', 'APPROVED - ACTION NEEDED'] },
+    { k: 'returned', label: 'Returned',   cls: 'g-returned', st: ['RETURNED FOR CORRECTION'] },
+    { k: 'approved', label: 'Approved',   cls: 'g-approved', st: ['APPROVED'] },
+    { k: 'declined', label: 'Declined',   cls: 'g-declined', st: ['REJECTED'] }];
+  const inGroup = (g, r) => g.st.indexOf(r.status) > -1;
+  const shortDate = iso => iso ? new Date(iso).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' }) : '—';
+  const ageDays = iso => Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 864e5));
+  const actionShort = a => String(a || '').replace('AMEND - ', 'Amend: ').replace('REGISTER NEW', 'New').toLowerCase().replace(/^\w/, c => c.toUpperCase());
+
   function drawMyRequests() {
     const box = $('#myReq'); if (!box) return;
-    if (!myReqs.length) { box.innerHTML = '<p class="hint">No requests yet.</p>'; return; }
-    box.innerHTML = myReqs.slice(0, 20).map((r, i) => `<details class="reqitem"><summary>
-        <span class="pill ${STATUS_PILL[r.status] || ''}">${esc(r.status)}</span> <b>${esc(r.trade || r.salescode)}</b>
-        <small>${esc(r.id)} · ${esc(r.action.replace('AMEND - ', 'Amend: ').replace('REGISTER NEW', 'Register new'))} · ${esc(r.partner)}</small></summary>
-        <div class="req-body">
-          ${r.status === 'FOR APPROVAL' && r.approver ? `<p>Waiting for: <b>${esc(r.approver)}</b></p>` : ''}
-          ${r.salescode && r.status === 'APPROVED' ? `<p>Sales Code: <b>${esc(r.salescode)}</b></p>` : ''}
-          ${r.lastRemark ? `<div class="notice ${r.status === 'RETURNED FOR CORRECTION' || r.status === 'REJECTED' ? 'bad' : 'ok'}"><b>${esc(r.lastRemark.who)}</b>${esc(r.lastRemark.remarks)}</div>` : ''}
-          ${r.changes ? `<p class="hint" style="white-space:pre-line">${esc(r.changes)}</p>` : ''}
+    const cancelled = myReqs.filter(r => r.status === 'CANCELLED');
+    box.innerHTML = `<div class="tiles">${GROUPS.map(g => {
+        const n = myReqs.filter(r => inGroup(g, r)).length;
+        return `<button class="tile ${g.cls}" data-g="${g.k}" ${n ? '' : 'disabled'}><b>${n}</b><span>${g.label}</span></button>`; }).join('')}</div>
+      ${cancelled.length ? `<button class="linkish" data-g="cancelled">Cancelled (${cancelled.length})</button>` : ''}
+      ${!myReqs.length ? '<p class="hint">No requests yet.</p>' : ''}`;
+    box.querySelectorAll('[data-g]').forEach(b => b.onclick = () => openGroup(b.dataset.g));
+  }
+
+  /* Pop-up table for one group */
+  function openGroup(k) {
+    const g = GROUPS.find(x => x.k === k) || { k: 'cancelled', label: 'Cancelled', st: ['CANCELLED'] };
+    const list = myReqs.filter(r => inGroup(g, r));
+    const head = { process: ['Request', 'Ageing', 'Current approver'], returned: ['Request', 'Returned by / reason', 'Action'],
+                   approved: ['Request', 'Sales Code', 'Approved on'], declined: ['Request', 'Declined by / reason', 'Date'],
+                   cancelled: ['Request', 'Cancelled on', ''] }[k];
+    const reqCell = r => `<b>${esc(r.trade || r.salescode)}</b><small>${esc(r.id)} · ${esc(actionShort(r.action))}<br>${esc(r.partner)} · sent ${shortDate(r.at)}</small>`;
+    const rows = list.map((r, i) => {
+      let c2 = '', c3 = '';
+      if (k === 'process') {
+        const d = ageDays(r.at);
+        c2 = `<span class="age ${d >= 3 ? 'late' : ''}">${d} day${d === 1 ? '' : 's'}</span>`;
+        c3 = r.status === 'FOR APPROVAL' ? esc(r.approver || '—') : '<span class="pill warn">Approved – being recorded by admin</span>';
+      } else if (k === 'returned') {
+        const x = r.returned || {};
+        c2 = `<b>${esc(x.who || '—')}</b><small>${shortDate(x.at)}</small><div class="reason">“${esc(x.remarks || '')}”</div>`;
+        c3 = `<button class="btn mini" data-edit="${i}">Update &amp; resend</button>`;
+      } else if (k === 'approved') {
+        c2 = r.salescode ? `<span class="code">${esc(r.salescode)}</span>` : '—';
+        c3 = shortDate(r.approvedAt);
+      } else if (k === 'declined') {
+        const x = r.rejected || {};
+        c2 = `<b>${esc(x.who || '—')}</b><div class="reason">“${esc(x.remarks || '')}”</div>`;
+        c3 = shortDate(x.at);
+      } else {
+        c2 = shortDate(r.cancelled && r.cancelled.at);
+      }
+      return `<tr data-i="${i}"><td>${reqCell(r)}</td><td>${c2}</td><td>${c3}</td></tr>
+        <tr class="more" id="more${i}" hidden><td colspan="3">
+          ${r.changes ? `<p class="hint" style="white-space:pre-line;margin-top:0">${esc(r.changes)}</p>` : ''}
           <ul class="hist">${(r.history || []).map(h => `<li>${new Date(h.at).toLocaleString()} — ${esc(h.who)}: <b>${esc(h.what)}</b>${h.remarks ? ' — “' + esc(h.remarks) + '”' : ''}</li>`).join('')}</ul>
-          ${r.canEdit ? `<button class="btn" data-edit="${i}">✏️ Correct &amp; resend</button>` : ''}
-          ${r.canCancel ? `<button class="btn ghost" data-cancel="${i}">Cancel this request</button>` : ''}
-        </div></details>`).join('');
-    box.querySelectorAll('[data-edit]').forEach(b => b.onclick = () => startCorrection(myReqs[Number(b.dataset.edit)]));
-    box.querySelectorAll('[data-cancel]').forEach(b => b.onclick = () => cancelRequest(myReqs[Number(b.dataset.cancel)]));
+          ${r.canCancel ? `<button class="btn ghost mini" data-cancel="${i}">Cancel this request</button>` : ''}
+        </td></tr>`;
+    }).join('');
+    const m = document.createElement('div');
+    m.className = 'modal';
+    m.innerHTML = `<div class="sheet"><div class="sheet-hd"><h2>${esc(g.label)} <span class="hint">(${list.length})</span></h2><button class="x" aria-label="Close">✕</button></div>
+      <p class="hint" style="margin:0 0 8px">Tap a request to see its history${k === 'process' || k === 'returned' ? ' or cancel it' : ''}.</p>
+      <div class="tbl"><table class="grid"><thead><tr>${head.map(h => `<th>${h}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table></div></div>`;
+    document.body.appendChild(m);
+    document.body.style.overflow = 'hidden';
+    const close = () => { m.remove(); document.body.style.overflow = ''; };
+    m.querySelector('.x').onclick = close;
+    m.onclick = e => { if (e.target === m) close(); };
+    m.querySelectorAll('tr[data-i]').forEach(tr => tr.onclick = e => {
+      if (e.target.closest('button')) return;
+      const more = m.querySelector('#more' + tr.dataset.i); more.hidden = !more.hidden; tr.classList.toggle('open', !more.hidden);
+    });
+    m.querySelectorAll('[data-edit]').forEach(b => b.onclick = () => { close(); startCorrection(list[Number(b.dataset.edit)]); });
+    m.querySelectorAll('[data-cancel]').forEach(b => b.onclick = async () => { close(); await cancelRequest(list[Number(b.dataset.cancel)]); });
   }
   async function cancelRequest(r) {
     if (!navigator.onLine) { toast('Connect to the internet to cancel.'); return; }
@@ -645,6 +701,7 @@
     await loadBrgy(); if (current !== 'location') return;
     const p = partnerObj();
     const options = p ? p.areas.filter(a => covKey(a.prov) === covKey(draft.resubmit.prov)) : [];
+    if (!options.some(a => key(a.muni) === key(draft.gridMuni) && key(a.prov) === key(draft.gridProv))) options.unshift({ muni: draft.gridMuni, prov: draft.gridProv });
     const rm = draft.resubmit.remark;
     view.innerHTML = `${stepsBar()}<div class="card"><h2>Correct your request</h2>
       ${rm ? `<div class="notice bad"><b>${esc(rm.who)} asked you to correct:</b>${esc(rm.remarks)}</div>` : ''}

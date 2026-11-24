@@ -138,7 +138,7 @@
 
   /* ======================= AUTH / REFERENCE DATA ======================= */
   function logout(expired) {
-    session = null; boot = null; ls.del('session');
+    session = null; boot = null; myReqs = null; ls.del('session'); ls.del('recent'); ls.del('myReqs');
     $('#menuBtn').hidden = true; $('#who').textContent = '';
     if (expired) toast('Please log in again.');
     renderLogin();
@@ -228,7 +228,6 @@
   /* ---------- HOME ---------- */
   async function renderHome() {
     const queue = (await DB.all('queue').catch(() => [])).sort((a, b) => b.savedAt - a.savedAt);
-    const recent = ls.get('recent', []);
     const hasDraft = !!(await DB.get('draft', 'current').catch(() => null));
     const loadedAt = boot && boot.loadedAt ? new Date(boot.loadedAt) : null;
     const today = loadedAt && loadedAt.toDateString() === new Date().toDateString();
@@ -250,8 +249,7 @@
           ${q.error ? `<small class="err">Problem: ${esc(q.error)}</small>` : ''}</div>
           <button data-discard="${esc(q.clientId)}">Discard</button></div>`).join('')}
         <button class="btn ghost" id="sendNowBtn" style="margin-top:10px">⬆ Send now</button></div>` : ''}
-      ${recent.length ? `<div class="card"><h2>Sent from this phone</h2>${recent.slice(0, 10).map(r => `<div class="list-item"><div class="t">
-          <b>${esc(r.trade)}</b> <span class="pill">${esc(r.requestId)}</span><small>${esc(r.partner)} · ${new Date(r.at).toLocaleString()}</small></div></div>`).join('')}</div>` : ''}`;
+`;
     $('#newBtn').onclick = () => newDraft();
     $('#amendBtn').onclick = () => go('amend');
     loadMyRequests();
@@ -593,14 +591,16 @@
 
   /* ======================= MY REQUESTS (status, cancel, correct & resend) ======================= */
   const STATUS_PILL = { 'FOR APPROVAL': 'warn', 'RETURNED FOR CORRECTION': 'bad', 'APPROVED': 'ok', 'REJECTED': 'bad', 'CANCELLED': '', 'APPROVED - ACTION NEEDED': 'warn' };
-  let myReqs = ls.get('myReqs', null);
+  const myReqsKey = () => 'myReqs:' + key(session && session.user.name);
+  let myReqs = null;
   async function loadMyRequests() {
     const box = $('#myReq'); if (!box) return;
+    myReqs = myReqs || ls.get(myReqsKey(), null);
     if (myReqs) drawMyRequests();
     if (!navigator.onLine) { if (!myReqs) box.innerHTML = '<p class="hint">Connect to the internet to see the status of your requests.</p>'; return; }
     try {
       const r = await api('myRequests', { token: session.token }, 30000);
-      myReqs = r.requests; ls.set('myReqs', myReqs);
+      myReqs = r.requests; ls.set(myReqsKey(), myReqs);
       drawMyRequests();
     } catch (e) { if (!myReqs && $('#myReq')) $('#myReq').innerHTML = '<p class="hint">Could not load your requests.</p>'; }
   }
@@ -912,6 +912,7 @@
 
   /* ======================= START ======================= */
   async function start() {
+    ls.del('myReqs');   // old shared cache from an earlier version
     $('#menuBtn').hidden = false;
     $('#who').textContent = session.user.name + ' · ' + session.user.position;
     boot = boot || ls.get('boot:' + key(session.user.name), null);

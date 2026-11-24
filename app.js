@@ -89,6 +89,28 @@
   $('#installBtn').onclick = async () => { if (!installEvt) return; installEvt.prompt(); await installEvt.userChoice; installEvt = null; $('#installBar').hidden = true; };
   window.addEventListener('appinstalled', () => { $('#installBar').hidden = true; toast('Installed ✓ Open it from your home screen'); });
 
+  // iPhone/iPad: Safari has no install button, so show how to add it to the home screen.
+  (function iosInstallHint() {
+    const ua = navigator.userAgent;
+    const isIOS = /iPhone|iPad|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    const installed = navigator.standalone === true || (window.matchMedia && matchMedia('(display-mode: standalone)').matches);
+    if (!isIOS || installed) return;
+    const until = ls.get('iosHintHiddenUntil', 0);
+    if (until && Date.now() < until) return;
+    const inApp = /FBAN|FBAV|Instagram|Line\/|Viber|Messenger|MicroMessenger|GSA\//i.test(ua);
+    const bar = $('#installBar');
+    bar.querySelector('span').innerHTML = inApp
+      ? '<b>To install:</b> open this page in <b>Safari</b> first (tap ••• → Open in Safari).'
+      : '<b>To install:</b> tap <b>•••</b> (or <b>Share ⬆</b>) → <b>Share</b> → <b>Add to Home Screen</b> → <b>Add</b>.';
+    $('#installBtn').hidden = true;
+    const x = document.createElement('button');
+    x.textContent = '✕'; x.setAttribute('aria-label', 'Hide');
+    x.style.cssText = 'margin-left:auto;background:none;color:#7a5200;border:0;font-size:18px;padding:4px 8px';
+    x.onclick = () => { bar.hidden = true; ls.set('iosHintHiddenUntil', Date.now() + 7 * 864e5); };
+    bar.appendChild(x);
+    bar.hidden = false;
+  })();
+
   /* ======================= GPS ======================= */
   let gps = null, gpsErr = null, watching = false;
   function startGps() {

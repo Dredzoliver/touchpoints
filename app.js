@@ -340,7 +340,7 @@
 
     const L = draft.locate, st = draft.offline ? 'OFFLINE' : L.status;
     const options = st === 'OFFLINE' ? p.areas : (L.options || []);
-    const sel = options.length && st !== 'OK' ? `<label for="muniSel">${st === 'CONFIRM_MUNI' ? 'Confirm municipality' : 'Municipality'} <span class="req">*</span></label>
+    const sel = options.length ? `<label for="muniSel">${st === 'CONFIRM_MUNI' ? 'Confirm municipality' : 'Municipality'} <span class="req">*</span></label>
       <select id="muniSel"><option value="">— Select municipality —</option>
       ${groupByProv(options).map(([prov, list]) => `<optgroup label="${esc(prov)}">${list.map(a => {
         const v = a.muni + '|' + a.prov; return `<option value="${esc(v)}" ${v === draft.gridMuni + '|' + draft.gridProv ? 'selected' : ''}>${esc(a.muni)}</option>`; }).join('')}</optgroup>`).join('')}
@@ -348,7 +348,8 @@
     const det = L && L.detected ? L.detected : {};
     let box = '';
     const nearNote = det.mappedBy === 'nearest' ? `<br><small>GPS town “${esc(det.city)}” is not in GRID, so it was matched to the nearest GRID municipality (${esc(det.distanceKm)} km away).</small>` : '';
-    if (st === 'OK') box = `<div class="notice ok"><b>✓ Location verified</b>${esc(L.match.muni)}, ${esc(L.match.prov)} is within ${esc(draft.partner)}'s coverage.${nearNote}</div>`;
+    if (st === 'OK') box = `<div class="notice ok"><b>✓ Location verified</b>${esc(L.match.muni)}, ${esc(L.match.prov)} is within ${esc(draft.partner)}'s coverage.${nearNote}
+      <br><small>You can change the municipality below if needed (${esc(draft.partner)}'s municipalities in this province).</small></div>`;
     else if (st === 'CONFIRM_MUNI') box = `<div class="notice warn"><b>Please confirm the municipality</b>GPS shows <b style="display:inline">${esc(det.city || det.gridMuni)}</b>, which is not in ${esc(draft.partner)}'s assigned municipalities for ${esc(/^NCR|^MANILA$/i.test(det.gridProv || '') ? 'Metro Manila' : det.gridProv)}. Choose the correct one below.${nearNote}</div>`;
     else if (st === 'OUT_OF_COVERAGE') box = `<div class="notice bad"><b>✗ Cannot proceed</b>This location (${esc(det.city)}, ${esc(det.gridProv || det.province)}) is not within the coverage of ${esc(draft.partner)}.
       ${L.coverage && L.coverage.length ? `<br>Coverage: ${esc(L.coverage.join(', '))}` : ''}</div>`;
@@ -463,7 +464,7 @@
         <label for="loadingClass">Loading Classification <span class="req">*</span></label><select id="loadingClass">${opts(boot.loadingClasses, draft.loadingClass)}</select>
         <label for="loadingPrimary">Primary Code <span class="hint" style="display:inline">(optional)</span></label>
         <input type="text" id="loadingPrimary" value="${esc(draft.loadingPrimary)}" autocapitalize="characters" spellcheck="false">
-        <div id="primaryHint" class="hint">Leave blank if none. If filled, it must be an active Loading touchpoint.</div>` : ''}
+        <div id="primaryHint" class="hint">Leave blank if none. If filled, it must be an active Loading touchpoint of ${esc(draft.partner)}.</div>` : ''}
       ${t.ott ? `<h3>OTT Acquisition</h3>
         <label for="ottClass">OTT Classification <span class="req">*</span></label><select id="ottClass">${opts(boot.ottClasses, draft.ottClass)}</select>
         <label for="ottPrimary">Primary Salescode <span class="hint" style="display:inline">(optional)</span></label>
@@ -476,14 +477,19 @@
     bindBack();
     $('#nextBtn').onclick = () => { const miss = detailsProblem(); if (miss) { toast(miss); return; } go('agree'); };
   }
-  function primaryOk() { const c = normCode(draft.loadingPrimary); return !c || (boot.activeLoadingCodes || []).indexOf(c) > -1; }
+  // Primary Code must be an ACTIVE Loading touchpoint of the SAME partner
+  function primaryOk() {
+    const c = normCode(draft.loadingPrimary); if (!c) return true;
+    const byP = boot.loadingCodesByPartner || {};
+    return (byP[draft.partner] || []).indexOf(c) > -1;
+  }
   function checkPrimary() {
     const h = $('#primaryHint'), inp = $('#loadingPrimary'); if (!h) return;
     const c = normCode(draft.loadingPrimary);
-    if (!c) { h.className = 'hint'; h.textContent = 'Leave blank if none. If filled, it must be an active Loading touchpoint.'; inp.classList.remove('invalid'); return; }
+    if (!c) { h.className = 'hint'; h.textContent = 'Leave blank if none. If filled, it must be an active Loading touchpoint of ' + draft.partner + '.'; inp.classList.remove('invalid'); return; }
     const ok = primaryOk();
     h.className = 'hint ' + (ok ? 'ok' : 'bad');
-    h.textContent = ok ? '✓ Active Loading touchpoint' : '✗ Not found among active Loading touchpoints. Please check the code.';
+    h.textContent = ok ? '✓ Active Loading touchpoint of ' + draft.partner : '✗ Not an active Loading touchpoint of ' + draft.partner + '. Please check the code.';
     inp.classList.toggle('invalid', !ok);
   }
   function detailsProblem() {
@@ -494,7 +500,7 @@
       if (!draft.owner.trim()) return 'Please enter the Owner Name / CS Email';
       if (!draft.contact.trim()) return 'Please enter the Contact Number';
     }
-    if (t.loading) { if (!draft.loadingClass) return 'Please choose the Loading Classification'; if (!primaryOk()) return 'Primary Code is not an active Loading touchpoint'; }
+    if (t.loading) { if (!draft.loadingClass) return 'Please choose the Loading Classification'; if (!primaryOk()) return 'Primary Code is not an active Loading touchpoint of ' + draft.partner; }
     if (t.ott && !draft.ottClass) return 'Please choose the OTT Classification';
     return '';
   }
@@ -532,7 +538,9 @@
         ${sec('Location')}${row('Municipality', draft.gridMuni)}${row('Province', draft.gridProv)}
         ${row('Barangay', draft.brgy)}${row('Street', draft.street)}
         ${row('GPS', draft.lat.toFixed(6) + ', ' + draft.lng.toFixed(6) + ' (±' + draft.acc + ' m)')}
-        ${row('Location check', draft.offline ? 'Will be checked when sent' : ({ OK: 'Verified by GPS', CONFIRM_MUNI: 'Municipality confirmed by you', UNVERIFIED: 'Not verified' })[draft.locate.status])}
+        ${row('Location check', draft.offline ? 'Will be checked when sent'
+          : draft.locate.status === 'OK' && draft.gridMuni !== draft.locate.match.muni ? 'Province verified by GPS; municipality changed by you'
+          : ({ OK: 'Verified by GPS', CONFIRM_MUNI: 'Municipality confirmed by you', UNVERIFIED: 'Not verified' })[draft.locate.status])}
         ${sec('Agreement')}${row('Terms and Conditions', 'Accepted')}${row('Consent', 'Accepted')}
       </table>
       <div class="row-btns"><button class="btn ghost" id="backBtn" data-to="agree">‹ Back</button>

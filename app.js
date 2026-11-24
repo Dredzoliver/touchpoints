@@ -349,7 +349,7 @@
     let box = '';
     const nearNote = det.mappedBy === 'nearest' ? `<br><small>GPS town “${esc(det.city)}” is not in GRID, so it was matched to the nearest GRID municipality (${esc(det.distanceKm)} km away).</small>` : '';
     if (st === 'OK') box = `<div class="notice ok"><b>✓ Location verified</b>${esc(L.match.muni)}, ${esc(L.match.prov)} is within ${esc(draft.partner)}'s coverage.${nearNote}</div>`;
-    else if (st === 'CONFIRM_MUNI') box = `<div class="notice warn"><b>Please confirm the municipality</b>GPS shows <b style="display:inline">${esc(det.city || det.gridMuni)}</b>, which is not in ${esc(draft.partner)}'s assigned municipalities for ${esc(det.gridProv)}. Choose the correct one below.${nearNote}</div>`;
+    else if (st === 'CONFIRM_MUNI') box = `<div class="notice warn"><b>Please confirm the municipality</b>GPS shows <b style="display:inline">${esc(det.city || det.gridMuni)}</b>, which is not in ${esc(draft.partner)}'s assigned municipalities for ${esc(/^NCR|^MANILA$/i.test(det.gridProv || '') ? 'Metro Manila' : det.gridProv)}. Choose the correct one below.${nearNote}</div>`;
     else if (st === 'OUT_OF_COVERAGE') box = `<div class="notice bad"><b>✗ Cannot proceed</b>This location (${esc(det.city)}, ${esc(det.gridProv || det.province)}) is not within the coverage of ${esc(draft.partner)}.
       ${L.coverage && L.coverage.length ? `<br>Coverage: ${esc(L.coverage.join(', '))}` : ''}</div>`;
     else if (st === 'UNVERIFIED') box = `<div class="notice warn"><b>Address could not be identified</b>Choose the municipality. Head office will verify it.</div>`;

@@ -205,11 +205,14 @@
   const typeInfo = code => ({ DTH: { dth: 1 }, LOADING: { loading: 1 }, OTT: { ott: 1 }, 'DTH+LOADING': { dth: 1, loading: 1 }, 'LOADING+OTT': { loading: 1, ott: 1 } }[code] || {});
   const typeLabel = code => ((boot.types || []).find(t => t.code === code) || {}).label || code;
 
+  const RESEND_STEPS = ['location', 'type', 'details', 'review'];
   function stepsBar() {
-    const i = STEPS.indexOf(current);
-    return `<div class="steps">${STEPS.map((s, j) => `<i class="${j <= i ? 'done' : ''}"></i>`).join('')}</div>
-            <div class="step-title">Step ${i + 1} of ${STEPS.length} · ${STEP_LABEL[current]}</div>`;
+    const list = draft && draft.resubmit ? RESEND_STEPS : STEPS;
+    const i = list.indexOf(current);
+    return `<div class="steps">${list.map((s, j) => `<i class="${j <= i ? 'done' : ''}"></i>`).join('')}</div>
+            <div class="step-title">${draft && draft.resubmit ? 'Correcting ' + esc(draft.resubmit.id) + ' · ' : ''}Step ${i + 1} of ${list.length} · ${STEP_LABEL[current]}</div>`;
   }
+  const covKey = p => (/^NCR/i.test(p || '') || /^MANILA$/i.test(String(p || '').trim())) ? 'NCR' : key(p);
   const navBtns = (nextLabel, nextDisabled, backTo) => `<div class="row-btns">
       <button class="btn ghost" id="backBtn" data-to="${backTo}">‹ Back</button>
       <button class="btn" id="nextBtn" ${nextDisabled ? 'disabled' : ''}>${nextLabel}</button></div>`;
@@ -218,7 +221,8 @@
   function render() {
     if (!session) return renderLogin();
     ({ home: renderHome, partner: renderPartner, photo: renderPhoto, location: renderLocation, type: renderType,
-       details: renderDetails, agree: renderAgree, review: renderReview, done: renderDone })[current]();
+       details: renderDetails, agree: renderAgree, review: renderReview, done: renderDone,
+       amend: renderAmendMenu, amendCode: renderAmendCode, amendForm: renderAmendForm, amendReview: renderAmendReview, amendDone: renderAmendDone })[current]();
   }
 
   /* ---------- HOME ---------- */
@@ -237,7 +241,9 @@
         <button class="btn dark" id="resumeBtn">Continue it</button><button class="btn ghost" id="dropDraftBtn">Delete it</button></div>` : ''}
       <button class="big-choice" id="newBtn" ${boot && boot.partners.length ? '' : 'disabled'}>➕ Register New Touchpoint
         <small>New DTH Acquisition, Loading or OTT touchpoint</small></button>
-      <button class="big-choice" disabled>✏️ Amend Existing Touchpoint<small>Coming soon</small></button>
+      <button class="big-choice" id="amendBtn" ${boot && boot.partners.length ? '' : 'disabled'}>✏️ Amend Existing Touchpoint
+        <small>Change information, upgrade DTH class, or add to Loading / DTH / OTT</small></button>
+      <div class="card" id="myReqCard"><h2>My requests</h2><div id="myReq"><p class="hint">${navigator.onLine ? '<span class="spinner"></span>Loading…' : 'Connect to the internet to see the status of your requests.'}</p></div></div>
       ${queue.length ? `<div class="card"><h2>${queue.length} request(s) waiting to send</h2>
         ${queue.map(q => `<div class="list-item"><img src="data:image/jpeg;base64,${q.request.image}" alt="">
           <div class="t"><b>${esc(q.request.tradeName)}</b><small>${esc(q.request.partner)} · ${new Date(q.savedAt).toLocaleString()}</small>
@@ -247,6 +253,8 @@
       ${recent.length ? `<div class="card"><h2>Sent from this phone</h2>${recent.slice(0, 10).map(r => `<div class="list-item"><div class="t">
           <b>${esc(r.trade)}</b> <span class="pill">${esc(r.requestId)}</span><small>${esc(r.partner)} · ${new Date(r.at).toLocaleString()}</small></div></div>`).join('')}</div>` : ''}`;
     $('#newBtn').onclick = () => newDraft();
+    $('#amendBtn').onclick = () => go('amend');
+    loadMyRequests();
     if (hasDraft) {
       $('#resumeBtn').onclick = async () => { draft = await DB.get('draft', 'current'); go(draft.step || 'partner'); };
       $('#dropDraftBtn').onclick = async () => { if (confirm('Delete the unfinished request?')) { await clearDraft(); draft = null; render(); } };
@@ -317,6 +325,7 @@
   /* ---------- 3. LOCATION CHECK ---------- */
   async function renderLocation() {
     const p = partnerObj();
+    if (draft.resubmit) return renderResubmitLocation();
     if (!draft.locate && navigator.onLine) {
       view.innerHTML = `${stepsBar()}<div class="card"><h2>Checking location</h2>
         <div class="notice warn"><span class="spinner"></span>Checking if this spot is within ${esc(draft.partner)}'s coverage…</div></div>`;
@@ -475,7 +484,7 @@
      ['loadingPrimary', 'loadingPrimary'], ['ottClass', 'ottClass'], ['ottPrimary', 'ottPrimary']].forEach(([a, b]) => bind(a, b));
     if (t.loading) checkPrimary();
     bindBack();
-    $('#nextBtn').onclick = () => { const miss = detailsProblem(); if (miss) { toast(miss); return; } go('agree'); };
+    $('#nextBtn').onclick = () => { const miss = detailsProblem(); if (miss) { toast(miss); return; } go(draft.resubmit ? 'review' : 'agree'); };
   }
   // Primary Code must be an ACTIVE Loading touchpoint of the SAME partner
   function primaryOk() {
@@ -527,7 +536,7 @@
     const row = (a, b) => b ? `<tr><td>${esc(a)}</td><td>${esc(b)}</td></tr>` : '';
     const sec = s => `<tr class="section"><td colspan="2">${esc(s)}</td></tr>`;
     view.innerHTML = `${stepsBar()}<div class="card"><h2>Review your request</h2>
-      <img class="thumb" src="data:image/jpeg;base64,${draft.image}" alt="">
+      ${draft.image ? `<img class="thumb" src="data:image/jpeg;base64,${draft.image}" alt="">` : `<div class="notice ok">Store photo and GPS location are kept from your original request.</div>`}
       <table class="sum">
         ${sec('Request')}${row('Action', 'Register New Touchpoint')}${row('Touchpoint type', typeLabel(draft.type))}
         ${row('Partner', draft.partner)}${row('Requestor', session.user.name + ' (' + session.user.position + ')')}
@@ -537,15 +546,16 @@
         ${t.ott ? row('OTT Classification', draft.ottClass) + row('OTT Primary Salescode', normCode(draft.ottPrimary) || '—') : ''}
         ${sec('Location')}${row('Municipality', draft.gridMuni)}${row('Province', draft.gridProv)}
         ${row('Barangay', draft.brgy)}${row('Street', draft.street)}
-        ${row('GPS', draft.lat.toFixed(6) + ', ' + draft.lng.toFixed(6) + ' (±' + draft.acc + ' m)')}
-        ${row('Location check', draft.offline ? 'Will be checked when sent'
+        ${draft.resubmit ? row('GPS', 'Kept from the original request') : row('GPS', draft.lat.toFixed(6) + ', ' + draft.lng.toFixed(6) + ' (±' + draft.acc + ' m)')}
+        ${draft.resubmit ? '' : row('Location check', draft.offline ? 'Will be checked when sent'
           : draft.locate.status === 'OK' && draft.gridMuni !== draft.locate.match.muni ? 'Province verified by GPS; municipality changed by you'
           : ({ OK: 'Verified by GPS', CONFIRM_MUNI: 'Municipality confirmed by you', UNVERIFIED: 'Not verified' })[draft.locate.status])}
-        ${sec('Agreement')}${row('Terms and Conditions', 'Accepted')}${row('Consent', 'Accepted')}
+        ${draft.resubmit ? '' : sec('Agreement') + row('Terms and Conditions', 'Accepted') + row('Consent', 'Accepted')}
       </table>
-      <div class="row-btns"><button class="btn ghost" id="backBtn" data-to="agree">‹ Back</button>
-        <button class="btn" id="sendBtn">Confirm &amp; Send</button></div></div>`;
+      <div class="row-btns"><button class="btn ghost" id="backBtn" data-to="${draft.resubmit ? 'details' : 'agree'}">‹ Back</button>
+        <button class="btn" id="sendBtn">${draft.resubmit ? 'Resend' : 'Confirm &amp; Send'}</button></div></div>`;
     bindBack();
+    if (draft.resubmit) { $('#sendBtn').onclick = sendResubmit; return; }
     $('#sendBtn').onclick = async () => {
       const req = { clientId: draft.clientId, partner: draft.partner, touchpointType: draft.type, tradeName: draft.tradeName.trim(),
         brgy: draft.brgy.trim(), street: draft.street.trim(), gridMuni: draft.gridMuni, gridProv: draft.gridProv,
@@ -578,6 +588,297 @@
       <button class="btn ghost" id="homeBtn">Home</button></div>`;
     $('#anotherBtn').onclick = () => newDraft();
     $('#homeBtn').onclick = () => go('home');
+  }
+
+
+  /* ======================= MY REQUESTS (status, cancel, correct & resend) ======================= */
+  const STATUS_PILL = { 'FOR APPROVAL': 'warn', 'RETURNED FOR CORRECTION': 'bad', 'APPROVED': 'ok', 'REJECTED': 'bad', 'CANCELLED': '', 'APPROVED - ACTION NEEDED': 'warn' };
+  let myReqs = ls.get('myReqs', null);
+  async function loadMyRequests() {
+    const box = $('#myReq'); if (!box) return;
+    if (myReqs) drawMyRequests();
+    if (!navigator.onLine) { if (!myReqs) box.innerHTML = '<p class="hint">Connect to the internet to see the status of your requests.</p>'; return; }
+    try {
+      const r = await api('myRequests', { token: session.token }, 30000);
+      myReqs = r.requests; ls.set('myReqs', myReqs);
+      drawMyRequests();
+    } catch (e) { if (!myReqs && $('#myReq')) $('#myReq').innerHTML = '<p class="hint">Could not load your requests.</p>'; }
+  }
+  function drawMyRequests() {
+    const box = $('#myReq'); if (!box) return;
+    if (!myReqs.length) { box.innerHTML = '<p class="hint">No requests yet.</p>'; return; }
+    box.innerHTML = myReqs.slice(0, 20).map((r, i) => `<details class="reqitem"><summary>
+        <span class="pill ${STATUS_PILL[r.status] || ''}">${esc(r.status)}</span> <b>${esc(r.trade || r.salescode)}</b>
+        <small>${esc(r.id)} · ${esc(r.action.replace('AMEND - ', 'Amend: ').replace('REGISTER NEW', 'Register new'))} · ${esc(r.partner)}</small></summary>
+        <div class="req-body">
+          ${r.status === 'FOR APPROVAL' && r.approver ? `<p>Waiting for: <b>${esc(r.approver)}</b></p>` : ''}
+          ${r.salescode && r.status === 'APPROVED' ? `<p>Sales Code: <b>${esc(r.salescode)}</b></p>` : ''}
+          ${r.lastRemark ? `<div class="notice ${r.status === 'RETURNED FOR CORRECTION' || r.status === 'REJECTED' ? 'bad' : 'ok'}"><b>${esc(r.lastRemark.who)}</b>${esc(r.lastRemark.remarks)}</div>` : ''}
+          ${r.changes ? `<p class="hint" style="white-space:pre-line">${esc(r.changes)}</p>` : ''}
+          <ul class="hist">${(r.history || []).map(h => `<li>${new Date(h.at).toLocaleString()} — ${esc(h.who)}: <b>${esc(h.what)}</b>${h.remarks ? ' — “' + esc(h.remarks) + '”' : ''}</li>`).join('')}</ul>
+          ${r.canEdit ? `<button class="btn" data-edit="${i}">✏️ Correct &amp; resend</button>` : ''}
+          ${r.canCancel ? `<button class="btn ghost" data-cancel="${i}">Cancel this request</button>` : ''}
+        </div></details>`).join('');
+    box.querySelectorAll('[data-edit]').forEach(b => b.onclick = () => startCorrection(myReqs[Number(b.dataset.edit)]));
+    box.querySelectorAll('[data-cancel]').forEach(b => b.onclick = () => cancelRequest(myReqs[Number(b.dataset.cancel)]));
+  }
+  async function cancelRequest(r) {
+    if (!navigator.onLine) { toast('Connect to the internet to cancel.'); return; }
+    const reason = prompt('Cancel ' + r.id + '?\nReason (optional):', '');
+    if (reason === null) return;
+    try { await api('cancel', { token: session.token, id: r.id, reason }); toast('Request cancelled'); loadMyRequests(); }
+    catch (e) { toast(isNetErr(e) ? 'Could not reach the server.' : e.message, 5000); }
+  }
+  function startCorrection(r) {
+    if (!navigator.onLine) { toast('Connect to the internet to correct and resend.'); return; }
+    const e = r.edit; if (!e) return;
+    if (e.kind === 'AMEND') { am = { purpose: e.purpose, code: e.code, db: e.db, resubmit: { id: r.id, remark: r.lastRemark }, prefill: e }; go('amendCode'); lookupAmend(); return; }
+    draft = { clientId: uid(), resubmit: { id: r.id, remark: r.lastRemark, prov: e.gridProv }, partner: e.partner, image: null,
+      lat: Number(e.lat) || null, lng: Number(e.lng) || null, acc: null, locate: null, offline: false,
+      gridMuni: e.gridMuni, gridProv: e.gridProv, brgy: e.brgy || '', brgyDetected: '', brgyOther: false, street: e.street || '', full: '',
+      type: e.touchpointType, tradeName: e.tradeName || '', dthClass: e.dthClass || '', owner: e.owner || '', contact: e.contact || '',
+      loadingClass: e.loadingClass || '', loadingPrimary: e.loadingPrimary || '', ottClass: e.ottClass || '', ottPrimary: e.ottPrimary || '',
+      terms: true, consent: true };
+    saveDraft(); go('location');
+  }
+  async function renderResubmitLocation() {
+    await loadBrgy(); if (current !== 'location') return;
+    const p = partnerObj();
+    const options = p ? p.areas.filter(a => covKey(a.prov) === covKey(draft.resubmit.prov)) : [];
+    const rm = draft.resubmit.remark;
+    view.innerHTML = `${stepsBar()}<div class="card"><h2>Correct your request</h2>
+      ${rm ? `<div class="notice bad"><b>${esc(rm.who)} asked you to correct:</b>${esc(rm.remarks)}</div>` : ''}
+      <p class="hint">The store photo and GPS location stay the same. You can change the municipality (same province), barangay, street, type and details.</p>
+      <label for="muniSel">Municipality <span class="req">*</span></label>
+      <select id="muniSel">${groupByProv(options).map(([prov, list]) => `<optgroup label="${esc(prov)}">${list.map(a => {
+        const v = a.muni + '|' + a.prov; return `<option value="${esc(v)}" ${v === draft.gridMuni + '|' + draft.gridProv ? 'selected' : ''}>${esc(a.muni)}</option>`; }).join('')}</optgroup>`).join('')}</select>
+      <div id="brgyBox"></div>
+      <label for="street">Street / House no.</label>
+      <input type="text" id="street" value="${esc(draft.street)}">
+      <div class="row-btns"><button class="btn ghost" id="backBtn">‹ Cancel</button><button class="btn" id="nextBtn">Next ›</button></div></div>`;
+    const brgyList0 = brgyList();
+    if (brgyList0 && draft.brgy && brgyList0.indexOf(draft.brgy) < 0) draft.brgyOther = true;   // keep a typed barangay
+    $('#muniSel').onchange = e => { const [m, pv] = e.target.value.split('|'); draft.gridMuni = m; draft.gridProv = pv; draft.brgy = ''; draft.brgyOther = false; saveDraft(); renderBrgy(); };
+    $('#street').oninput = e => { draft.street = e.target.value; saveDraft(); };
+    renderBrgy();
+    $('#backBtn').onclick = async () => { if (confirm('Stop correcting? Nothing will be sent.')) { await clearDraft(); draft = null; go('home'); } };
+    $('#nextBtn').onclick = () => { if (!draft.brgy.trim()) { toast('Please choose the Barangay'); return; } go('type'); };
+  }
+  async function sendResubmit() {
+    if (!navigator.onLine) { toast('Connect to the internet to resend.'); return; }
+    const btn = $('#sendBtn'); btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>Sending…';
+    const req = { touchpointType: draft.type, tradeName: draft.tradeName.trim(), brgy: draft.brgy.trim(), street: draft.street.trim(),
+      gridMuni: draft.gridMuni, gridProv: draft.gridProv, dthClass: draft.dthClass, owner: draft.owner.trim(), contact: draft.contact.trim(),
+      loadingClass: draft.loadingClass, loadingPrimary: normCode(draft.loadingPrimary), ottClass: draft.ottClass, ottPrimary: normCode(draft.ottPrimary) };
+    try {
+      await api('resubmit', { token: session.token, id: draft.resubmit.id, request: req }, 60000);
+      const id = draft.resubmit.id; await clearDraft(); draft = null;
+      toast('Resent ✓ ' + id + ' is back with the approver'); go('home');
+    } catch (e) { btn.disabled = false; btn.textContent = 'Resend'; toast(isNetErr(e) ? 'Could not reach the server.' : e.message, 6000); }
+  }
+
+  /* ======================= AMEND EXISTING TOUCHPOINT ======================= */
+  let am = null;   // { purpose, code, db, rec, values, justification, resubmit }
+  const AMEND_OPTS = [
+    ['CHANGE', '📝 Change information', 'Edit the details of an active touchpoint'],
+    ['UPGRADE', '⬆️ Upgrade DTH Acquisition class', 'Multibrand → Exclusive → Satlite Partner Store → Cignal Partner / Supported Store'],
+    ['DTH>LOADING', '➕ DTH Acquisition → add as Loading', 'Same Sales Code, added to Loading touchpoints'],
+    ['LOADING>DTH', '➕ Loading → add as DTH Acquisition', 'Same Sales Code, added to DTH Acquisition touchpoints'],
+    ['LOADING>OTT', '➕ Loading → add as OTT Acquisition', 'Same Sales Code, added to OTT touchpoints']];
+  const amendTitle = p => (AMEND_OPTS.find(o => o[0] === p) || [, p])[1].replace(/^\S+\s/, '');
+
+  function renderAmendMenu() {
+    view.innerHTML = `<div class="card"><h2>Amend existing touchpoint</h2><p class="hint" style="margin-top:0">Needs signal. Amendments go to the department for approval.</p></div>
+      ${AMEND_OPTS.map(o => `<button class="big-choice" data-p="${o[0]}">${o[1]}<small>${o[2]}</small></button>`).join('')}
+      <button class="btn ghost" id="homeBtn">‹ Back</button>`;
+    view.querySelectorAll('[data-p]').forEach(b => b.onclick = () => { am = { purpose: b.dataset.p }; go('amendCode'); });
+    $('#homeBtn').onclick = () => go('home');
+  }
+
+  function renderAmendCode() {
+    view.innerHTML = `<div class="card"><h2>${esc(amendTitle(am.purpose))}</h2>
+      ${am.resubmit && am.resubmit.remark ? `<div class="notice bad"><b>${esc(am.resubmit.remark.who)} asked you to correct:</b>${esc(am.resubmit.remark.remarks)}</div>` : ''}
+      <label for="amCode">Sales Code <span class="req">*</span></label>
+      <input type="text" id="amCode" value="${esc(am.code || '')}" autocapitalize="characters" spellcheck="false" ${am.resubmit ? 'disabled' : ''}>
+      <div id="amMsg"></div>
+      <div class="row-btns"><button class="btn ghost" id="backBtn">‹ Back</button><button class="btn" id="amFind">Check</button></div></div>`;
+    $('#backBtn').onclick = () => { const toHome = am && am.resubmit; am = null; go(toHome ? 'home' : 'amend'); };
+    $('#amCode').onkeydown = e => { if (e.key === 'Enter') lookupAmend(); };
+    $('#amFind').onclick = lookupAmend;
+  }
+  async function lookupAmend() {
+    const inp = $('#amCode'), msg = $('#amMsg'); if (!inp) return;
+    const code = normCode(inp.value); if (!code) { toast('Please enter the Sales Code'); return; }
+    if (!navigator.onLine) { msg.innerHTML = '<div class="notice bad">No signal. Amendments need the internet to check the Sales Code.</div>'; return; }
+    msg.innerHTML = '<div class="notice warn"><span class="spinner"></span>Checking ' + esc(code) + '…</div>';
+    try {
+      const r = await api('lookup', { token: session.token, code, purpose: am.purpose }, 45000);
+      am.code = r.code; am.records = r.records;
+      if (am.purpose === 'CHANGE' && r.records.length > 1 && !am.db) {
+        msg.innerHTML = `<div class="notice ok"><b>✓ Found in ${r.records.length} databases.</b>Which one do you want to change?</div>` +
+          r.records.map((x, i) => `<button class="big-choice" data-i="${i}">${esc(x.dbLabel)}<small>${esc(x.summary.name)} · ${esc(x.summary.muni)}, ${esc(x.summary.prov)}</small></button>`).join('');
+        msg.querySelectorAll('[data-i]').forEach(b => b.onclick = () => { am.rec = am.records[Number(b.dataset.i)]; am.db = am.rec.db; startAmendForm(); });
+        return;
+      }
+      am.rec = am.db ? r.records.find(x => x.db === am.db) || r.records[0] : r.records[0]; am.db = am.rec.db;
+      startAmendForm();
+    } catch (e) {
+      msg.innerHTML = `<div class="notice bad">${esc(isNetErr(e) ? 'Could not reach the server. Check your signal.' : e.message)}</div>`;
+    }
+  }
+  function startAmendForm() {
+    const rec = am.rec;
+    am.values = {}; am.justification = (am.prefill && am.prefill.justification) || '';
+    (rec.fields || []).forEach(f => { am.values[f.h] = f.type === 'area' ? Object.assign({}, f.value || {}) : (f.value || ''); });
+    if (am.prefill && am.prefill.values) Object.keys(am.prefill.values).forEach(h => { am.values[h] = am.prefill.values[h]; });
+    if (am.purpose === 'UPGRADE') am.values = { CLASS: am.prefill && am.prefill.values ? am.prefill.values.CLASS : '' };
+    go('amendForm');
+  }
+  const areaKey = a => a ? key(a.muni) + '|' + key(a.prov) : '';
+  function amendAreaFor(fieldsArea) { return fieldsArea || am.values.AREA || null; }
+
+  function renderAmendForm() {
+    const rec = am.rec;
+    const ro = (rec.readonly || []).map(x => `<tr><td>${esc(x.label)}</td><td>${esc(x.value)}</td></tr>`).join('');
+    const head = `<div class="card"><h2>${esc(amendTitle(am.purpose))}</h2>
+      ${am.resubmit && am.resubmit.remark ? `<div class="notice bad"><b>${esc(am.resubmit.remark.who)} asked you to correct:</b>${esc(am.resubmit.remark.remarks)}</div>` : ''}
+      <div class="notice ok"><b>✓ ${esc(am.code)} · ${esc(rec.dbLabel)}</b>${esc(rec.summary.name)} — ${esc(rec.summary.muni)}, ${esc(rec.summary.prov)} · ${esc(rec.partner)}</div>
+      ${ro ? `<h3>Cannot be changed</h3><table class="sum">${ro}</table>` : ''}`;
+    let body = '';
+    if (am.purpose === 'UPGRADE') {
+      body = `<h3>Upgrade</h3><p>Current class: <b>${esc(rec.currentClass)}</b> (level ${rec.currentLevel})</p>
+        ${rec.upgradeOptions.map(o => `<label class="type-opt ${am.values.CLASS === o.cls ? 'on' : ''}"><input type="radio" name="upg" value="${esc(o.cls)}" ${am.values.CLASS === o.cls ? 'checked' : ''}> ${esc(o.cls)} <span class="hint" style="margin-left:auto">level ${o.level}</span></label>`).join('')}`;
+    } else {
+      body = `<h3>${am.purpose === 'CHANGE' ? 'Edit the details' : 'Details for ' + esc(rec.targetLabel)}</h3>` + rec.fields.map((f, i) => fieldHtml(f, i)).join('');
+    }
+    const justReq = am.purpose === 'CHANGE' || am.purpose === 'UPGRADE';
+    view.innerHTML = head + body + `
+      <label for="amJust">${justReq ? 'Justification <span class="req">*</span>' : 'Remarks (optional)'}</label>
+      <textarea id="amJust" rows="3" placeholder="${justReq ? 'Why is this change needed?' : ''}">${esc(am.justification)}</textarea>
+      <div class="row-btns"><button class="btn ghost" id="backBtn">‹ Back</button><button class="btn" id="nextBtn">Review ›</button></div></div>`;
+    // bind fields
+    if (am.purpose === 'UPGRADE') view.querySelectorAll('input[name=upg]').forEach(r => r.onchange = () => {
+      am.values.CLASS = r.value; view.querySelectorAll('.type-opt').forEach(l => l.classList.toggle('on', l.contains(r))); });
+    (rec.fields || []).forEach((f, i) => bindField(f, i));
+    $('#amJust').oninput = e => { am.justification = e.target.value; };
+    $('#backBtn').onclick = () => { if (am.resubmit) { if (confirm('Stop correcting? Nothing will be sent.')) { am = null; go('home'); } } else { am.db = null; go('amendCode'); } };
+    $('#nextBtn').onclick = () => { const p = amendProblem(); if (p) { toast(p); return; } go('amendReview'); };
+  }
+  function fieldHtml(f, i) {
+    const id = 'af' + i, v = am.values[f.h], req = f.req ? ' <span class="req">*</span>' : '';
+    const opts = (list, val) => `<option value="">— Select —</option>` + list.map(c => `<option ${key(c) === key(val) ? 'selected' : ''}>${esc(c)}</option>`).join('') +
+      (val && !list.some(c => key(c) === key(val)) ? `<option selected value="${esc(val)}">${esc(val)} (current)</option>` : '');
+    if (f.type === 'dthClass') return `<label for="${id}">${esc(f.label)}${req}</label><select id="${id}">${opts(boot.dthClasses, v)}</select>`;
+    if (f.type === 'loadClass') return `<label for="${id}">${esc(f.label)}${req}</label><select id="${id}">${opts(boot.loadingClasses, v)}</select>`;
+    if (f.type === 'area') {
+      const cur = v || {}, has = f.areas.some(a => areaKey(a) === areaKey(cur));
+      return `<label for="${id}">${esc(f.label)}${req}</label><select id="${id}">
+        ${!has && cur.muni ? `<option value="" selected>${esc(cur.muni)}, ${esc(cur.prov)} (current — choose to change)</option>` : ''}
+        ${groupByProv(f.areas).map(([prov, list]) => `<optgroup label="${esc(prov)}">${list.map(a => `<option value="${esc(a.muni + '|' + a.prov)}" ${areaKey(a) === areaKey(cur) ? 'selected' : ''}>${esc(a.muni)}</option>`).join('')}</optgroup>`).join('')}</select>`;
+    }
+    if (f.type === 'brgy') return `<div id="${id}box"></div>`;
+    const ph = f.type === 'primary' ? 'Leave blank if none' : '';
+    const t = f.type === 'tel' ? 'tel' : 'text';
+    return `<label for="${id}">${esc(f.label)}${req}</label><input type="${t}" id="${id}" value="${esc(v)}" placeholder="${ph}" ${f.type === 'primary' || f.type === 'code' ? 'autocapitalize="characters" spellcheck="false"' : ''}>
+      ${f.type === 'primary' ? `<div class="hint" id="${id}hint"></div>` : ''}`;
+  }
+  function bindField(f, i) {
+    const el = $('#af' + i);
+    if (f.type === 'brgy') { drawAmendBrgy(f, i); return; }
+    if (!el) return;
+    el.oninput = el.onchange = () => {
+      if (f.type === 'area') {
+        if (!el.value) return;
+        const [m, p] = el.value.split('|'); am.values.AREA = { muni: m, prov: p };
+        (am.rec.fields || []).forEach((g, j) => { if (g.type === 'brgy') { am.values[g.h] = ''; drawAmendBrgy(g, j); } });
+      } else am.values[f.h] = el.value;
+      if (f.type === 'primary') primaryHint(f, i);
+    };
+    if (f.type === 'primary') primaryHint(f, i);
+  }
+  function primaryHint(f, i) {
+    const h = $('#af' + i + 'hint'), c = normCode(am.values[f.h]); if (!h) return;
+    if (!c) { h.className = 'hint'; h.textContent = 'Optional. Must be an active Loading touchpoint of ' + am.rec.partner + '.'; return; }
+    const ok = ((boot.loadingCodesByPartner || {})[am.rec.partner] || []).indexOf(c) > -1;
+    h.className = 'hint ' + (ok ? 'ok' : 'bad');
+    h.textContent = ok ? '✓ Active Loading touchpoint of ' + am.rec.partner : '✗ Not an active Loading touchpoint of ' + am.rec.partner;
+  }
+  async function drawAmendBrgy(f, i) {
+    await loadBrgy();
+    const box = $('#af' + i + 'box'); if (!box) return;
+    const area = f.area || am.values.AREA;
+    const list = area ? BRGY[key(area.muni) + '|' + key(area.prov)] : null;
+    const v = am.values[f.h] || '';
+    const label = `<label for="af${i}">${esc(f.label)}${f.req ? ' <span class="req">*</span>' : ''}</label>`;
+    if (!list) { box.innerHTML = label + `<input type="text" id="af${i}" value="${esc(v)}">`; $('#af' + i).oninput = e => { am.values[f.h] = e.target.value; }; return; }
+    const other = v && list.indexOf(v) < 0;
+    box.innerHTML = label + `<select id="af${i}"><option value="">— Select barangay (${list.length}) —</option>
+      ${list.map(b => `<option ${b === v ? 'selected' : ''}>${esc(b)}</option>`).join('')}
+      <option value="__OTHER__" ${other ? 'selected' : ''}>Other / not in the list…</option></select>
+      ${other ? `<input type="text" id="af${i}o" value="${esc(v)}" style="margin-top:8px" placeholder="Type the barangay">` : ''}`;
+    $('#af' + i).onchange = e => {
+      if (e.target.value === '__OTHER__') { am.values[f.h] = ' '; drawAmendBrgy(f, i); setTimeout(() => { const o = $('#af' + i + 'o'); if (o) { o.value = ''; o.focus(); } am.values[f.h] = ''; }, 0); }
+      else am.values[f.h] = e.target.value;
+    };
+    if ($('#af' + i + 'o')) $('#af' + i + 'o').oninput = e => { am.values[f.h] = e.target.value; };
+  }
+  function amendProblem() {
+    const rec = am.rec;
+    if (am.purpose === 'UPGRADE') { if (!am.values.CLASS) return 'Please choose the class to upgrade to'; }
+    else for (const f of rec.fields) {
+      const v = am.values[f.h];
+      if (f.req && (f.type === 'area' ? !(v && v.muni) : !String(v || '').trim())) return 'Please fill in: ' + f.label;
+      if (f.type === 'primary' && normCode(v) && ((boot.loadingCodesByPartner || {})[rec.partner] || []).indexOf(normCode(v)) < 0)
+        return 'Primary Code is not an active Loading touchpoint of ' + rec.partner;
+    }
+    if ((am.purpose === 'CHANGE' || am.purpose === 'UPGRADE') && !am.justification.trim()) return 'Please write the justification';
+    if (am.purpose === 'CHANGE' && !amendChanges().length) return 'Nothing was changed yet';
+    return '';
+  }
+  function amendChanges() {
+    const rec = am.rec;
+    if (am.purpose === 'UPGRADE') return [['DTH Acquisition Class', rec.currentClass, am.values.CLASS]];
+    if (am.purpose !== 'CHANGE') return rec.fields.map(f => [f.label, '', am.values[f.h] || '—']);
+    return rec.fields.filter(f => {
+      const v = am.values[f.h], o = f.value;
+      return f.type === 'area' ? areaKey(v) !== areaKey(o) : key(v) !== key(o);
+    }).map(f => f.type === 'area' ? [f.label, o2s(f.value), o2s(am.values.AREA)] : [f.label, f.value, am.values[f.h]]);
+  }
+  const o2s = a => a && a.muni ? a.muni + ', ' + a.prov : '';
+  function renderAmendReview() {
+    const ch = amendChanges(), isChange = am.purpose === 'CHANGE' || am.purpose === 'UPGRADE';
+    view.innerHTML = `<div class="card"><h2>Review your amendment</h2>
+      <table class="sum"><tr><td>Request</td><td>${esc(amendTitle(am.purpose))}</td></tr><tr><td>Sales Code</td><td>${esc(am.code)}</td></tr>
+        <tr><td>Partner</td><td>${esc(am.rec.partner)}</td></tr><tr><td>Touchpoint</td><td>${esc(am.rec.summary.name)}</td></tr>
+        <tr class="section"><td colspan="2">${isChange ? 'Changes' : 'Add as ' + esc(am.rec.targetLabel)}</td></tr>
+        ${ch.map(c => `<tr><td>${esc(c[0])}</td><td>${isChange ? `<s style="color:#999">${esc(c[1] || '—')}</s><br><b>${esc(c[2] || '—')}</b>` : esc(c[2])}</td></tr>`).join('')}
+        ${am.justification.trim() ? `<tr><td>${isChange ? 'Justification' : 'Remarks'}</td><td>${esc(am.justification)}</td></tr>` : ''}
+        <tr><td>Approver</td><td>Department (final)</td></tr></table>
+      <div class="row-btns"><button class="btn ghost" id="backBtn">‹ Back</button><button class="btn" id="sendBtn">${am.resubmit ? 'Resend' : 'Confirm &amp; Send'}</button></div></div>`;
+    $('#backBtn').onclick = () => go('amendForm');
+    $('#sendBtn').onclick = sendAmend;
+  }
+  async function sendAmend() {
+    if (!navigator.onLine) { toast('No signal. Connect to the internet to send.'); return; }
+    const btn = $('#sendBtn'); btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>Sending…';
+    const values = {};
+    if (am.purpose === 'CHANGE') {   // send only what changed
+      am.rec.fields.forEach(f => { const v = am.values[f.h], o = f.value;
+        if (f.type === 'area' ? areaKey(v) !== areaKey(o) : key(v) !== key(o)) values[f.h] = v; });
+    } else Object.assign(values, am.values);
+    const req = { clientId: uid(), purpose: am.purpose, code: am.code, db: am.db, values, justification: am.justification.trim(), deviceId: DEVICE_ID };
+    try {
+      const r = am.resubmit ? await api('resubmit', { token: session.token, id: am.resubmit.id, request: req }, 60000)
+                            : await api('submitAmend', { token: session.token, request: req }, 60000);
+      am.sentId = am.resubmit ? am.resubmit.id : r.requestId; go('amendDone');
+    } catch (e) { btn.disabled = false; btn.textContent = am.resubmit ? 'Resend' : 'Confirm & Send'; toast(isNetErr(e) ? 'Could not reach the server.' : e.message, 6000); }
+  }
+  function renderAmendDone() {
+    view.innerHTML = `<div class="card center"><div class="done-mark">✅</div><h2>${am.resubmit ? 'Request resent' : 'Amendment sent'}</h2>
+      <p>Request ID: <b>${esc(am.sentId)}</b></p><p class="hint">Status: For approval by the department. You'll get an email once it's decided.</p>
+      <button class="btn" id="againBtn">✏️ Another amendment</button><button class="btn ghost" id="homeBtn">Home</button></div>`;
+    $('#againBtn').onclick = () => { am = null; go('amend'); };
+    $('#homeBtn').onclick = () => { am = null; go('home'); };
   }
 
   /* ======================= SENDING (also retries after no signal) ======================= */

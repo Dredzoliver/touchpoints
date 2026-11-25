@@ -75,7 +75,7 @@
     }
   }
   function logout(silent) {
-    session = null; store.del('adminSession'); clearInterval(timer); dash = null; apprItems = []; apprLoaded = false;
+    session = null; store.del('adminSession'); clearInterval(timer); dash = null; apprItems = []; apprLoaded = false; DBC = {};
     try { if (window.google && google.accounts) google.accounts.id.disableAutoSelect(); } catch (e) {}
     renderLogin(silent ? '' : 'You have signed out.');
   }
@@ -87,6 +87,7 @@
     document.querySelectorAll('#tabs [data-tab]').forEach(b => b.classList.toggle('on', b.dataset.tab === tab));
     // already loaded → show instantly; fresh data comes from ↻ Refresh, the 5-minute timer, or after a decision
     if (tab === 'dashboard') { if (dash) drawDashboard(); else renderDashboard(); }
+    else if (tab === 'databases') renderDatabases();
     else { if (apprLoaded) drawApprovals(); else renderApprovals(); }
   }
   function start() {
@@ -242,6 +243,124 @@
       view.querySelectorAll('[data-d]').forEach(b => { b.disabled = false; });
       btn.innerHTML = { APPROVE: '✓ Approve', RETURN: '↩ Return for correction', REJECT: '✕ Reject' }[d];
     }
+  }
+
+  /* ---------- DATABASES (DTH / Loading / OTT · Active & Purged · filters · Excel) ---------- */
+  let DBC = {};                                        // loaded databases, kept in memory
+  const dbState = { db: 'DTH', status: 'ACTIVE', f: { region: '', partner: '', province: '', month: '', cls: '' }, q: '', page: 0 };
+  const PAGE = 100;
+  const DB_TABS = [['DTH', 'DTH Acquisition'], ['LOADING', 'Loading'], ['OTT', 'OTT Acquisition']];
+  const FILTERS = [['region', 'Region'], ['partner', 'Partner'], ['province', 'Province'], ['month', ''], ['cls', 'Classification']];
+
+  async function renderDatabases(force) {
+    const db = dbState.db;
+    if (!DBC[db] || force) {
+      view.innerHTML = dbHead() + `<p class="hint"><span class="spinner"></span>Loading ${esc(DB_TABS.find(t => t[0] === db)[1])} records…</p>`;
+      bindDbHead();
+      try { DBC[db] = await api('adminDatabase', { token: session.portalToken, db }, 120000); }
+      catch (e) { if (tab === 'databases') view.innerHTML = dbHead() + `<div class="notice bad">${esc(e.message)}</div>`; bindDbHead(); return; }
+      if (tab !== 'databases' || dbState.db !== db) return;
+    }
+    drawDatabase();
+  }
+  function dbHead() {
+    return `<div class="head"><h2>Databases</h2>${DBC[dbState.db] ? `<span class="asof">loaded ${esc(DBC[dbState.db].asOf)}</span>` : ''}
+        <button class="refresh" id="dbRefresh">↻ Refresh</button></div>
+      <div class="seg">${DB_TABS.map(([k, l]) => `<button data-db="${k}" class="${dbState.db === k ? 'on' : ''}">${l}</button>`).join('')}</div>`;
+  }
+  function bindDbHead() {
+    view.querySelectorAll('[data-db]').forEach(b => b.onclick = () => {
+      if (dbState.db === b.dataset.db) return;
+      dbState.db = b.dataset.db; dbState.status = 'ACTIVE'; dbState.f = { region: '', partner: '', province: '', month: '', cls: '' }; dbState.q = ''; dbState.page = 0;
+      renderDatabases();
+    });
+    const r = $('#dbRefresh'); if (r) r.onclick = () => renderDatabases(true);
+  }
+  const statusOf = (D, r) => D.map.status < 0 ? 'ACTIVE' : (String(r[D.map.status]).trim().toUpperCase() || 'ACTIVE');
+  const valOf = (D, r, k) => {
+    if (k === 'month') { const v = D.map.date < 0 ? '' : r[D.map.date]; return /^\d{4}-\d{2}/.test(v) ? v.slice(0, 7) : ''; }
+    const i = D.map[k]; return i < 0 ? '' : String(r[i] || '').trim();
+  };
+  function filtered(D, except) {
+    const q = dbState.q.trim().toUpperCase();
+    return D.rows.filter(r => {
+      if (statusOf(D, r) !== dbState.status) return false;
+      for (const [k] of FILTERS) { if (k !== except && dbState.f[k] && valOf(D, r, k).toUpperCase() !== dbState.f[k].toUpperCase()) return false; }
+      if (q && !r.some(c => String(c).toUpperCase().includes(q))) return false;
+      return true;
+    });
+  }
+  const monthName2 = ym => { const [y, m] = ym.split('-').map(Number); return new Date(y, m - 1, 1).toLocaleDateString([], { month: 'short', year: 'numeric' }); };
+  function drawDatabase() {
+    const D = DBC[dbState.db]; if (!D) return;
+    const counts = { ACTIVE: 0, PURGED: 0 };
+    D.rows.forEach(r => { const s = statusOf(D, r); if (s in counts) counts[s]++; });
+    const list = filtered(D);
+    const pages = Math.max(1, Math.ceil(list.length / PAGE)); if (dbState.page >= pages) dbState.page = pages - 1;
+    const from = dbState.page * PAGE, show = list.slice(from, from + PAGE);
+    // each filter lists the values available given the other filters (so choices never lead to an empty list)
+    const opts = k => {
+      const set = new Map(); filtered(D, k).forEach(r => { const v = valOf(D, r, k); if (v) set.set(v.toUpperCase(), v); });
+      const arr = [...set.values()];
+      return k === 'month' ? arr.sort().reverse() : arr.sort((a, b) => a.localeCompare(b));
+    };
+    const hasFilter = Object.values(dbState.f).some(Boolean) || dbState.q;
+    view.innerHTML = dbHead() + `
+      <div class="seg small">${[['ACTIVE', 'Active'], ['PURGED', 'Purged']].map(([k, l]) => `<button data-st="${k}" class="${dbState.status === k ? 'on' : ''}">${l} <b>${fmtN(counts[k])}</b></button>`).join('')}</div>
+      <div class="filters-row">
+        ${FILTERS.map(([k, l]) => (k !== 'month' && D.map[k] < 0) || (k === 'month' && D.map.date < 0) ? '' : `<label class="f"><span>${k === 'month' ? esc(D.dateLabel) : l}</span>
+          <select data-f="${k}"><option value="">All</option>${opts(k).map(v => `<option value="${esc(v)}" ${v.toUpperCase() === dbState.f[k].toUpperCase() ? 'selected' : ''}>${esc(k === 'month' ? monthName2(v) : v)}</option>`).join('')}</select></label>`).join('')}
+        <label class="f grow"><span>Search</span><input type="search" id="dbQ" placeholder="Sales Code, name, town…" value="${esc(dbState.q)}"></label>
+      </div>
+      <div class="listbar">
+        <span><b>${fmtN(list.length)}</b> ${dbState.status === 'ACTIVE' ? 'active' : 'purged'} record${list.length === 1 ? '' : 's'}${hasFilter ? ' (filtered)' : ''}${list.length > PAGE ? ` · showing ${fmtN(from + 1)}–${fmtN(from + show.length)}` : ''}</span>
+        ${hasFilter ? '<button class="linkish" id="dbClear" style="padding:0">Clear filters</button>' : ''}
+        <span style="flex:1"></span>
+        <button class="btn mini" id="dbXlsx" ${list.length ? '' : 'disabled'}>⬇ Download Excel (${fmtN(list.length)})</button>
+      </div>
+      <div class="tablewrap"><table class="data db"><thead><tr>${D.columns.map(c => `<th>${esc(c)}</th>`).join('')}</tr></thead>
+        <tbody>${show.map(r => `<tr>${D.columns.map((c, i) => `<td>${esc(r[i])}</td>`).join('')}</tr>`).join('') ||
+          `<tr><td colspan="${D.columns.length}" class="muted" style="text-align:left;padding:20px">No records match these filters.</td></tr>`}</tbody></table></div>
+      ${pages > 1 ? `<div class="pager"><button class="refresh" id="pgPrev" ${dbState.page ? '' : 'disabled'}>‹ Previous</button>
+        <span>Page ${dbState.page + 1} of ${fmtN(pages)}</span><button class="refresh" id="pgNext" ${dbState.page < pages - 1 ? '' : 'disabled'}>Next ›</button></div>` : ''}`;
+    bindDbHead();
+    view.querySelectorAll('[data-st]').forEach(b => b.onclick = () => { dbState.status = b.dataset.st; dbState.f = { region: '', partner: '', province: '', month: '', cls: '' }; dbState.page = 0; drawDatabase(); });
+    view.querySelectorAll('[data-f]').forEach(s2 => s2.onchange = () => { dbState.f[s2.dataset.f] = s2.value; dbState.page = 0; drawDatabase(); });
+    const q = $('#dbQ'); let qt; q.oninput = () => { clearTimeout(qt); qt = setTimeout(() => { dbState.q = q.value; dbState.page = 0; drawDatabase(); const n = $('#dbQ'); n.focus(); n.setSelectionRange(n.value.length, n.value.length); }, 350); };
+    const c = $('#dbClear'); if (c) c.onclick = () => { dbState.f = { region: '', partner: '', province: '', month: '', cls: '' }; dbState.q = ''; dbState.page = 0; drawDatabase(); };
+    const p1 = $('#pgPrev'); if (p1) p1.onclick = () => { dbState.page--; drawDatabase(); scrollTo(0, 0); };
+    const p2 = $('#pgNext'); if (p2) p2.onclick = () => { dbState.page++; drawDatabase(); scrollTo(0, 0); };
+    $('#dbXlsx').onclick = () => downloadXlsx(D, list);
+  }
+
+  // Excel download of exactly what the filters show (SheetJS, loaded only when needed)
+  let xlsxReady = null;
+  function loadXlsx() {
+    if (xlsxReady) return xlsxReady;
+    xlsxReady = new Promise((res, rej) => { const s = document.createElement('script');
+      s.src = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js'; s.onload = res; s.onerror = () => { xlsxReady = null; rej(new Error('Could not load the Excel tool. Check your internet.')); };
+      document.head.appendChild(s); });
+    return xlsxReady;
+  }
+  async function downloadXlsx(D, list) {
+    const b = $('#dbXlsx'); const label = b.innerHTML; b.disabled = true; b.innerHTML = '<span class="spinner"></span>Preparing…';
+    try {
+      await loadXlsx();
+      const dateCols = new Set(D.columns.map((c, i) => /DATE|CREATION|RECRUITED/i.test(c) ? i : -1).filter(i => i >= 0));
+      const aoa = [D.columns].concat(list.map(r => r.map((v, i) => {
+        if (dateCols.has(i) && /^\d{4}-\d{2}-\d{2}$/.test(v)) { const [y, m, d] = v.split('-').map(Number); return new Date(y, m - 1, d); }
+        return v;   // everything else stays text (keeps leading zeros of mobile numbers and codes)
+      })));
+      const ws = XLSX.utils.aoa_to_sheet(aoa, { cellDates: true, dateNF: 'yyyy-mm-dd' });
+      ws['!cols'] = D.columns.map((c, i) => ({ wch: Math.min(40, Math.max(c.length, ...list.slice(0, 300).map(r => String(r[i] || '').length)) + 2) }));
+      ws['!autofilter'] = { ref: XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: list.length, c: D.columns.length - 1 } }) };
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, (D.label + ' ' + (dbState.status === 'ACTIVE' ? 'Active' : 'Purged')).slice(0, 31));
+      const parts = Object.entries(dbState.f).filter(([, v]) => v).map(([, v]) => v).concat(dbState.q ? ['search ' + dbState.q] : []);
+      const day = new Date().toISOString().slice(0, 10);
+      XLSX.writeFile(wb, `${D.label} - ${dbState.status === 'ACTIVE' ? 'Active' : 'Purged'}${parts.length ? ' - ' + parts.join(', ') : ''} - ${day}.xlsx`.replace(/[\\/:*?"<>|]/g, '-'));
+    } catch (e) { toast(e.message, 5000); }
+    finally { b.disabled = false; b.innerHTML = label; }
   }
 
   if (!CFG.API_URL) view.innerHTML = '<div class="notice bad">API_URL is not set in config.js.</div>';

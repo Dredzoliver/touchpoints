@@ -1,5 +1,6 @@
 /* Touchpoints Admin (head office) — Phase 4B: Dashboard + Approvals (DEPT inbox)
-   Login: ADMIN / DEPT (PORTAL USERS tab) see everything; RSM / RH / CH (PASSWORD tab, named in ROUTING MATRIX) see their area.
+   Sign in with Google: only sales.mis.team@gmail.com (ADMIN) and cig.channeldev@gmail.com (DEPT · CHANNEL DEV DIST),
+   or the accounts in Script Property ADMIN_ACCOUNTS. Both see everything.
    Same backend as the sales app (API_URL in ../config.js). */
 (function () {
   'use strict';
@@ -26,7 +27,7 @@
     } catch (e) { throw new Error(navigator.onLine ? 'Could not reach the server. Please try again.' : 'No internet connection.'); }
     finally { clearTimeout(to); }
     const j = await res.json();
-    if (!j.ok) { if (j.code === 'AUTH') { logout(); } throw new Error(j.error || 'Something went wrong.'); }
+    if (!j.ok) { if (j.code === 'AUTH' && action !== 'adminGoogleLogin') { logout(true); } throw new Error(j.error || 'Something went wrong.'); }
     return j;
   }
   const net = () => { const n = $('#net'); n.textContent = navigator.onLine ? '● Online' : '● Offline'; n.className = 'net' + (navigator.onLine ? '' : ' off'); };
@@ -35,27 +36,50 @@
   const days = n => n == null ? '—' : n === 0 ? 'today' : n === 1 ? '1 day' : n + ' days';
   const fmtN = n => Number(n || 0).toLocaleString();
 
-  /* ---------- login ---------- */
-  function renderLogin(msg) {
-    $('#tabs').hidden = true; $('#logoutBtn').hidden = true; $('#who').textContent = '';
-    view.innerHTML = `<div class="card" style="max-width:440px;margin:40px auto">
-      <h2>Log in</h2>
-      <p class="hint" style="margin-top:0">For head office (Admin, DEPT) and approvers (RSM, RH, CH).</p>
-      <label for="pw">Password</label><input type="password" id="pw" autocomplete="current-password">
-      ${msg ? `<div class="notice bad">${esc(msg)}</div>` : ''}
-      <button class="btn" id="loginBtn" style="margin-top:16px">Log in</button></div>`;
-    const go = async () => {
-      const b = $('#loginBtn'); b.disabled = true; b.innerHTML = '<span class="spinner"></span>Checking…';
-      try {
-        const r = await api('login', { password: $('#pw').value });
-        if (!r.portalToken) return renderLogin('This page is for head office and approvers only. TSMs use the Touchpoints Request app.');
-        session = { portalToken: r.portalToken, user: r.approver }; store.set('adminSession', session); start();
-      } catch (e) { renderLogin(e.message); }
-    };
-    $('#loginBtn').onclick = go; $('#pw').onkeydown = e => { if (e.key === 'Enter') go(); }; $('#pw').focus();
+  /* ---------- Sign in with Google (only the allowed head-office accounts) ---------- */
+  let gisReady = null;
+  function loadGis() {
+    if (gisReady) return gisReady;
+    gisReady = new Promise((res, rej) => {
+      const s = document.createElement('script');
+      s.src = 'https://accounts.google.com/gsi/client'; s.async = true; s.onload = res; s.onerror = () => rej(new Error('Could not load Google sign-in. Check your internet.'));
+      document.head.appendChild(s);
+    });
+    return gisReady;
   }
-  function logout() { session = null; store.del('adminSession'); clearInterval(timer); renderLogin(); }
-  $('#logoutBtn').onclick = () => { if (confirm('Log out?')) logout(); };
+  async function renderLogin(msg) {
+    $('#tabs').hidden = true; $('#logoutBtn').hidden = true; $('#who').textContent = '';
+    view.innerHTML = `<div class="card" style="max-width:460px;margin:40px auto;text-align:center">
+      <h2>Touchpoints Admin</h2>
+      <p class="hint" style="margin-top:0">For Sales MIS and Channel Dev only. Sign in with the Google account you use for work.</p>
+      ${msg ? `<div class="notice bad" style="text-align:left">${esc(msg)}</div>` : ''}
+      <div id="gbtn" style="display:flex;justify-content:center;margin:18px 0 6px"><span class="hint"><span class="spinner"></span>Loading Google sign-in…</span></div>
+      <p class="hint">Next time it signs you in automatically on this browser.</p></div>`;
+    let clientId;
+    try { clientId = (await api('adminConfig', {})).clientId; await loadGis(); }
+    catch (e) { $('#gbtn').innerHTML = `<div class="notice bad">${esc(e.message)}</div>`; return; }
+    if (!clientId) { $('#gbtn').innerHTML = '<div class="notice warn" style="text-align:left">Google sign-in is not set up yet. Ask the admin to add GOOGLE_CLIENT_ID in the script\'s Script Properties.</div>'; return; }
+    google.accounts.id.initialize({ client_id: clientId, callback: onGoogle, auto_select: !msg, cancel_on_tap_outside: false, use_fedcm_for_prompt: true });
+    $('#gbtn').innerHTML = '';
+    google.accounts.id.renderButton($('#gbtn'), { theme: 'outline', size: 'large', text: 'signin_with', shape: 'pill', width: 280 });
+    if (!msg) google.accounts.id.prompt();   // One Tap: signs in automatically if this browser already used an allowed account
+  }
+  async function onGoogle(resp) {
+    $('#gbtn').innerHTML = '<span class="hint"><span class="spinner"></span>Checking your account…</span>';
+    try {
+      const r = await api('adminGoogleLogin', { credential: resp.credential });
+      session = { portalToken: r.token, user: r.user }; store.set('adminSession', session); start();
+    } catch (e) {
+      try { google.accounts.id.disableAutoSelect(); } catch (x) {}
+      renderLogin(e.message);
+    }
+  }
+  function logout(silent) {
+    session = null; store.del('adminSession'); clearInterval(timer);
+    try { if (window.google && google.accounts) google.accounts.id.disableAutoSelect(); } catch (e) {}
+    renderLogin(silent ? '' : 'You have signed out.');
+  }
+  $('#logoutBtn').onclick = () => { if (confirm('Sign out?')) logout(); };
 
   /* ---------- tabs ---------- */
   document.querySelectorAll('#tabs [data-tab]').forEach(b => b.onclick = () => { tab = b.dataset.tab; show(); });
@@ -65,7 +89,7 @@
   }
   function start() {
     $('#tabs').hidden = false; $('#logoutBtn').hidden = false;
-    $('#who').textContent = session.user.name + ' · ' + session.user.role;
+    $('#who').textContent = (session.user.email || session.user.name) + ' · ' + session.user.role;
     show(); countApprovals();
     clearInterval(timer);
     timer = setInterval(() => { if (document.visibilityState !== 'visible') return; countApprovals(); if (tab === 'dashboard' && !$('.detail')) renderDashboard(true); }, 300000);   // every 5 minutes

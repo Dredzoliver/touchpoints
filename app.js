@@ -653,17 +653,24 @@
 
   function drawMyRequests() {
     const box = $('#myReq'); if (!box) return;
-    const cancelled = myReqs.filter(r => r.status === 'CANCELLED');
+    const section = kind => {
+      const mine = myReqs.filter(r => reqKind(r) === kind);
+      const cancelled = mine.filter(r => r.status === 'CANCELLED');
+      return `<div class="tracker"><h3>${KIND_LABEL[kind]}</h3>
+        <div class="tiles">${GROUPS.map(g => {
+          const n = mine.filter(r => inGroup(g, r)).length;
+          return `<button class="tile ${g.cls}" data-g="${g.k}" data-kind="${kind}" ${n ? '' : 'disabled'}><b>${n}</b><span>${g.label}</span></button>`; }).join('')}</div>
+        ${cancelled.length ? `<button class="linkish" data-g="cancelled" data-kind="${kind}">Cancelled (${cancelled.length})</button>` : ''}
+        ${!mine.length ? `<p class="hint">No ${kind === 'NEW' ? 'new touchpoint' : 'amendment'} requests this month yet.</p>` : ''}
+        <button class="archive-link" data-arc="${kind}">🗂 ${kind === 'NEW' ? 'New requests' : 'Amendments'} archive — previous months</button></div>`;
+    };
     box.innerHTML = `<p class="month-note">${esc(monthName(myReqs.month || monthKey(new Date())))} · plus anything still in process from earlier months</p>
-      <div class="tiles">${GROUPS.map(g => {
-        const n = myReqs.filter(r => inGroup(g, r)).length;
-        return `<button class="tile ${g.cls}" data-g="${g.k}" ${n ? '' : 'disabled'}><b>${n}</b><span>${g.label}</span></button>`; }).join('')}</div>
-      ${cancelled.length ? `<button class="linkish" data-g="cancelled">Cancelled (${cancelled.length})</button>` : ''}
-      ${!myReqs.length ? '<p class="hint">No requests this month yet.</p>' : ''}
-      <button class="archive-link" id="archiveBtn">🗂 Request archive — previous months</button>`;
-    box.querySelectorAll('[data-g]').forEach(b => b.onclick = () => openGroup(b.dataset.g));
-    $('#archiveBtn').onclick = openArchive;
+      ${section('NEW')}${section('AMEND')}`;
+    box.querySelectorAll('[data-g]').forEach(b => b.onclick = () => openGroup(b.dataset.g, b.dataset.kind));
+    box.querySelectorAll('[data-arc]').forEach(b => b.onclick = () => openArchive(b.dataset.arc));
   }
+  const reqKind = r => /^AMEND/i.test(r.action || '') ? 'AMEND' : 'NEW';
+  const KIND_LABEL = { NEW: '➕ New touchpoint requests', AMEND: '✏️ Amendment requests' };
 
   /* Archive: finished requests (approved / declined / cancelled) from previous months */
   function sheet(title, inner) {
@@ -677,11 +684,11 @@
     m.onclick = e => { if (e.target === m) close(); };
     return { m, close };
   }
-  async function openArchive() {
+  async function openArchive(kind) {
     if (!navigator.onLine) { toast('Connect to the internet to open the archive.'); return; }
-    const { m } = sheet('Request archive', `<div id="arcBody"><p class="hint"><span class="spinner"></span>Loading your previous requests…</p></div>`);
+    const { m } = sheet(kind === 'AMEND' ? 'Amendments archive' : 'New requests archive', `<div id="arcBody"><p class="hint"><span class="spinner"></span>Loading your previous requests…</p></div>`);
     let list;
-    try { list = (await api('myRequests', { token: session.token, scope: 'archive' }, 60000)).requests; }
+    try { list = (await api('myRequests', { token: session.token, scope: 'archive' }, 60000)).requests.filter(r => reqKind(r) === kind); }
     catch (e) { const b = m.querySelector('#arcBody'); if (b) b.innerHTML = `<div class="notice bad">${esc(isNetErr(e) ? 'Could not reach the server.' : e.message)}</div>`; return; }
     const body = m.querySelector('#arcBody'); if (!body) return;
     if (!list.length) { body.innerHTML = '<p class="hint">No finished requests from previous months.</p>'; return; }
@@ -715,9 +722,9 @@
   }
 
   /* Pop-up table for one group */
-  function openGroup(k) {
+  function openGroup(k, kind) {
     const g = GROUPS.find(x => x.k === k) || { k: 'cancelled', label: 'Cancelled', st: ['CANCELLED'] };
-    const list = myReqs.filter(r => inGroup(g, r));
+    const list = myReqs.filter(r => inGroup(g, r) && reqKind(r) === kind);
     const head = { process: ['Request', 'Ageing', 'Current approver'], returned: ['Request', 'Returned by / reason', 'Action'],
                    approved: ['Request', 'Sales Code', 'Approved on'], declined: ['Request', 'Declined by / reason', 'Date'],
                    cancelled: ['Request', 'Cancelled on', ''] }[k];
@@ -751,7 +758,7 @@
     }).join('');
     const m = document.createElement('div');
     m.className = 'modal';
-    m.innerHTML = `<div class="sheet"><div class="sheet-hd"><h2>${esc(g.label)} <span class="hint">(${list.length})</span></h2><button class="x" aria-label="Close">✕</button></div>
+    m.innerHTML = `<div class="sheet"><div class="sheet-hd"><h2>${kind === 'AMEND' ? 'Amendments' : 'New requests'} · ${esc(g.label)} <span class="hint">(${list.length})</span></h2><button class="x" aria-label="Close">✕</button></div>
       <p class="hint" style="margin:0 0 8px">Tap a request to see its history${k === 'process' || k === 'returned' ? ' or cancel it' : ''}.</p>
       <div class="tbl"><table class="grid"><thead><tr>${head.map(h => `<th>${h}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table></div></div>`;
     document.body.appendChild(m);

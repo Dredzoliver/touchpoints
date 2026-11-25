@@ -1001,7 +1001,7 @@
       <table class="sum"><tr><td>Request</td><td>${esc(amendTitle(am.purpose))}</td></tr><tr><td>Sales Code</td><td>${esc(am.code)}</td></tr>
         <tr><td>Partner</td><td>${esc(am.rec.partner)}</td></tr><tr><td>Touchpoint</td><td>${esc(am.rec.summary.name)}</td></tr>
         <tr class="section"><td colspan="2">${isChange ? 'Changes' : 'Add as ' + esc(am.rec.targetLabel)}</td></tr>
-        ${ch.map(c => `<tr><td>${esc(c[0])}</td><td>${isChange ? `<s style="color:#999">${esc(c[1] || '—')}</s><br><b>${esc(c[2] || '—')}</b>` : esc(c[2])}</td></tr>`).join('')}
+        ${ch.map(c => `<tr><td>${esc(c[0])}</td><td>${isChange ? `<s style="color:#999">${esc(c[1] || '—')}</s><br><b style="color:var(--brand)">${esc(c[2] || '—')}</b>` : `<b style="color:var(--brand)">${esc(c[2])}</b>`}</td></tr>`).join('')}
         ${am.justification.trim() ? `<tr><td>${isChange ? 'Justification' : 'Remarks'}</td><td>${esc(am.justification)}</td></tr>` : ''}
         <tr><td>Approver</td><td>Department (final)</td></tr></table>
       <div class="row-btns"><button class="btn ghost" id="backBtn">‹ Back</button><button class="btn" id="sendBtn">${am.resubmit ? 'Resend' : 'Confirm &amp; Send'}</button></div></div>`;

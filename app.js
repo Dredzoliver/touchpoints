@@ -833,7 +833,7 @@
   let am = null;   // { purpose, code, db, rec, values, justification, resubmit }
   const AMEND_OPTS = [
     ['CHANGE', '📝 Change information', 'Edit the details of an active touchpoint'],
-    ['UPGRADE', '⬆️ Upgrade DTH Acquisition class', 'Multibrand → Exclusive → Satlite Partner Store → Cignal Partner / Supported Store'],
+    ['UPGRADE', '⬆️ Upgrade DTH Acquisition class', 'Multibrand → Exclusive / Agent-Installer → Satlite Partner Store → Cignal Partner / Supported Store'],
     ['DTH>LOADING', '➕ DTH Acquisition → add as Loading', 'Same Sales Code, added to Loading touchpoints'],
     ['LOADING>DTH', '➕ Loading → add as DTH Acquisition', 'Same Sales Code, added to DTH Acquisition touchpoints'],
     ['LOADING>OTT', '➕ Loading → add as OTT Acquisition', 'Same Sales Code, added to OTT touchpoints']];

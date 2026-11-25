@@ -880,7 +880,7 @@
   }
   function startAmendForm() {
     const rec = am.rec;
-    am.values = {}; am.justification = (am.prefill && am.prefill.justification) || '';
+    am.values = {}; am.proofs = []; am.justification = (am.prefill && am.prefill.justification) || '';
     (rec.fields || []).forEach(f => { am.values[f.h] = f.type === 'area' ? Object.assign({}, f.value || {}) : (f.value || ''); });
     if (am.prefill && am.prefill.values) Object.keys(am.prefill.values).forEach(h => { am.values[h] = am.prefill.values[h]; });
     if (am.purpose === 'UPGRADE') am.values = { CLASS: am.prefill && am.prefill.values ? am.prefill.values.CLASS : '' };
@@ -907,12 +907,18 @@
     view.innerHTML = head + body + `
       <label for="amJust">${justReq ? 'Justification <span class="req">*</span>' : 'Remarks (optional)'}</label>
       <textarea id="amJust" rows="3" placeholder="${justReq ? 'Why is this change needed?' : ''}">${esc(am.justification)}</textarea>
+      ${am.purpose !== 'CHANGE' ? `<h3>Proof <span class="hint" style="display:inline;text-transform:none">(optional)</span></h3>
+        <div class="hint" style="margin-top:0">Take a picture or upload a photo / PDF from your phone (up to ${PROOF_MAX} files).</div>
+        ${am.prefill && am.prefill.proofCount ? `<div class="hint ok">✓ ${am.prefill.proofCount} proof file(s) from your first submission are kept.</div>` : ''}
+        <div id="proofList"></div>
+        <input type="file" id="proofIn" accept="image/*,application/pdf" multiple hidden>` : ''}
       <div class="row-btns"><button class="btn ghost" id="backBtn">‹ Back</button><button class="btn" id="nextBtn">Review ›</button></div></div>`;
     // bind fields
     if (am.purpose === 'UPGRADE') view.querySelectorAll('input[name=upg]').forEach(r => r.onchange = () => {
       am.values.CLASS = r.value; view.querySelectorAll('.type-opt').forEach(l => l.classList.toggle('on', l.contains(r))); });
     (rec.fields || []).forEach((f, i) => bindField(f, i));
     $('#amJust').oninput = e => { am.justification = e.target.value; };
+    if (am.purpose !== 'CHANGE') drawProofs();
     $('#backBtn').onclick = () => { if (am.resubmit) { if (confirm('Stop correcting? Nothing will be sent.')) { am = null; go('home'); } } else { am.db = null; go('amendCode'); } };
     $('#nextBtn').onclick = () => { const p = amendProblem(); if (p) { toast(p); return; } go('amendReview'); };
   }
@@ -976,6 +982,38 @@
     };
     if ($('#af' + i + 'o')) $('#af' + i + 'o').oninput = e => { am.values[f.h] = e.target.value; };
   }
+  /* ---------- optional proof (Upgrade and "add as" amendments) ---------- */
+  const PROOF_MAX = 3;
+  function proofLimit() { return PROOF_MAX - ((am.prefill && am.prefill.proofCount) || 0); }
+  function drawProofs() {
+    const box = $('#proofList'); if (!box) return;
+    am.proofs = am.proofs || [];
+    box.innerHTML = am.proofs.map((p, i) => `<div class="list-item">
+        ${p.type === 'application/pdf' ? '<span class="pdf">PDF</span>' : `<img src="data:${p.type};base64,${p.data}" alt="">`}
+        <div class="t"><b>${esc(p.name)}</b><small>${p.size >= 1048576 ? (p.size / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(p.size / 1024)) + ' KB'}</small></div>
+        <button data-rm="${i}">Remove</button></div>`).join('') +
+      (am.proofs.length < proofLimit() ? `<button class="btn ghost" id="proofBtn" style="margin-top:8px">📎 Add proof (photo or file)</button>` : '');
+    box.querySelectorAll('[data-rm]').forEach(b => b.onclick = () => { am.proofs.splice(Number(b.dataset.rm), 1); drawProofs(); });
+    const pb = $('#proofBtn'); if (pb) pb.onclick = () => $('#proofIn').click();
+    $('#proofIn').onchange = async e => {
+      const files = [...e.target.files]; e.target.value = '';
+      for (const f of files) {
+        if (am.proofs.length >= proofLimit()) { toast('Up to ' + PROOF_MAX + ' proof files only'); break; }
+        try {
+          if (f.type === 'application/pdf' || /\.pdf$/i.test(f.name)) {
+            if (f.size > 8 * 1024 * 1024) { toast(f.name + ' is too big (max 8 MB)'); continue; }
+            const data = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(',')[1]); r.onerror = rej; r.readAsDataURL(f); });
+            am.proofs.push({ name: f.name, type: 'application/pdf', data, size: f.size });
+          } else if (/^image\//.test(f.type) || /\.(jpe?g|png|heic|heif)$/i.test(f.name)) {
+            const data = (await resize(f)).split(',')[1];   // photos are shrunk like the store photo
+            am.proofs.push({ name: f.name.replace(/\.[^.]*$/, '') + '.jpg', type: 'image/jpeg', data, size: Math.round(data.length * 0.75) });
+          } else toast(f.name + ': only photos or PDF files');
+        } catch (err) { toast('Could not read ' + f.name); }
+      }
+      drawProofs();
+    };
+  }
+
   function amendProblem() {
     const rec = am.rec;
     if (am.purpose === 'UPGRADE') { if (!am.values.CLASS) return 'Please choose the class to upgrade to'; }
@@ -1010,6 +1048,7 @@
         <tr class="section"><td colspan="2">${isChange ? 'Changes' : 'Add as ' + esc(am.rec.targetLabel)}</td></tr>
         ${ch.map(c => `<tr><td>${esc(c[0])}</td><td>${isChange ? `<s style="color:#999">${esc(c[1] || '—')}</s><br><b style="color:var(--brand)">${esc(c[2] || '—')}</b>` : `<b style="color:var(--brand)">${esc(c[2])}</b>`}</td></tr>`).join('')}
         ${am.justification.trim() ? `<tr><td>${isChange ? 'Justification' : 'Remarks'}</td><td>${esc(am.justification)}</td></tr>` : ''}
+        ${am.purpose !== 'CHANGE' ? `<tr><td>Proof</td><td>${(am.proofs || []).length ? (am.proofs.length + ' file(s): ' + am.proofs.map(p => esc(p.name)).join(', ')) : '—'}</td></tr>` : ''}
         <tr><td>Approver</td><td>Department (final)</td></tr></table>
       <div class="row-btns"><button class="btn ghost" id="backBtn">‹ Back</button><button class="btn" id="sendBtn">${am.resubmit ? 'Resend' : 'Confirm &amp; Send'}</button></div></div>`;
     $('#backBtn').onclick = () => go('amendForm');
@@ -1023,10 +1062,12 @@
       am.rec.fields.forEach(f => { const v = am.values[f.h], o = f.value;
         if (f.type === 'area' ? areaKey(v) !== areaKey(o) : key(v) !== key(o)) values[f.h] = v; });
     } else Object.assign(values, am.values);
-    const req = { clientId: uid(), purpose: am.purpose, code: am.code, db: am.db, values, justification: am.justification.trim(), deviceId: DEVICE_ID };
+    const proofs = am.purpose === 'CHANGE' ? [] : (am.proofs || []).map(p => ({ name: p.name, type: p.type, data: p.data }));
+    const req = { clientId: uid(), purpose: am.purpose, code: am.code, db: am.db, values, justification: am.justification.trim(), proofs, deviceId: DEVICE_ID };
+    if (proofs.length) btn.innerHTML = '<span class="spinner"></span>Uploading proof & sending…';
     try {
-      const r = am.resubmit ? await api('resubmit', { token: session.token, id: am.resubmit.id, request: req }, 60000)
-                            : await api('submitAmend', { token: session.token, request: req }, 60000);
+      const r = am.resubmit ? await api('resubmit', { token: session.token, id: am.resubmit.id, request: req }, 180000)
+                            : await api('submitAmend', { token: session.token, request: req }, 180000);
       am.sentId = am.resubmit ? am.resubmit.id : r.requestId; go('amendDone');
     } catch (e) { btn.disabled = false; btn.textContent = am.resubmit ? 'Resend' : 'Confirm & Send'; toast(isNetErr(e) ? 'Could not reach the server.' : e.message, 6000); }
   }

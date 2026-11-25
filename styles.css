@@ -174,3 +174,6 @@ table.grid tr.more td { background:#FAFAFA; }
 /* Two trackers: New requests / Amendments */
 .tracker + .tracker { margin-top:18px; padding-top:16px; border-top:1px solid var(--line); }
 .tracker h3 { margin:0 0 10px !important; font-size:15px !important; color:var(--ink) !important; text-transform:none !important; letter-spacing:0 !important; }
+
+/* proof attachments */
+.list-item .pdf { width:46px; height:46px; border-radius:8px; flex:none; background:var(--brand); color:#fff; font:800 13px/46px system-ui, sans-serif; text-align:center; }

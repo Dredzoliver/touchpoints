@@ -869,7 +869,7 @@
     msg.innerHTML = '<div class="notice warn"><span class="spinner"></span>Checking ' + esc(code) + '…</div>';
     try {
       const r = await api('lookup', { token: session.token, code, purpose: am.purpose }, 45000);
-      am.code = r.code; am.records = r.records;
+      am.code = r.code; am.records = r.records; am.primaryNow = r.primaryNow || {};
       if (am.purpose === 'CHANGE' && r.records.length > 1 && !am.db) {
         msg.innerHTML = `<div class="notice ok"><b>✓ Found in ${r.records.length} databases.</b>Which one do you want to change?</div>` +
           r.records.map((x, i) => `<button class="big-choice" data-i="${i}">${esc(x.dbLabel)}<small>${esc(x.summary.name)} · ${esc(x.summary.muni)}, ${esc(x.summary.prov)}</small></button>`).join('');
@@ -942,7 +942,8 @@
     const ph = f.type === 'primary' ? 'Leave blank if none' : '';
     const t = f.type === 'tel' ? 'tel' : 'text';
     return `<label for="${id}">${esc(f.label)}${req}</label><input type="${t}" id="${id}" value="${esc(v)}" placeholder="${ph}" ${f.type === 'primary' || f.type === 'code' ? 'autocapitalize="characters" spellcheck="false"' : ''}>
-      ${f.type === 'primary' || f.type === 'tel' ? `<div class="hint" id="${id}hint">${f.type === 'tel' ? '11-digit mobile number starting with 0' : ''}</div>` : ''}`;
+      ${f.type === 'primary' || f.type === 'tel' ? `<div class="hint" id="${id}hint">${f.type === 'tel' ? '11-digit mobile number starting with 0' : ''}</div>` : ''}
+      ${f.type === 'primary' ? `<div id="${id}sync"></div>` : ''}`;
   }
   function bindField(f, i) {
     const el = $('#af' + i);
@@ -962,10 +963,27 @@
   }
   function primaryHint(f, i) {
     const h = $('#af' + i + 'hint'), c = normCode(am.values[f.h]); if (!h) return;
+    const sb = $('#af' + i + 'sync'); if (sb) { const r = primaryRemark(); sb.innerHTML = r ? `<div class="notice warn"><b>Remark</b>${esc(r)}</div>` : ''; }
     if (!c) { h.className = 'hint'; h.textContent = 'Optional. Must be an active Loading touchpoint of ' + am.rec.partner + '.'; return; }
     const ok = ((boot.loadingCodesByPartner || {})[am.rec.partner] || []).indexOf(c) > -1;
     h.className = 'hint ' + (ok ? 'ok' : 'bad');
     h.textContent = ok ? '✓ Active Loading touchpoint of ' + am.rec.partner : '✗ Not an active Loading touchpoint of ' + am.rec.partner;
+  }
+  /* The same primary code is kept in Loading (Primary Code) and OTT (Primary Salescode).
+     If this request sets a new one, the other database is updated too on approval — tell the rep. */
+  const PRIMARY_DB = { LOADING: 'PRIMARY CODE', OTT: 'PRIMARY SALESCODE' };
+  const DB_LABEL = { LOADING: 'Loading', OTT: 'OTT Acquisition', DTH: 'DTH Acquisition' };
+  function primaryRemark() {
+    if (!am || !am.rec || am.purpose === 'UPGRADE') return '';
+    const direct = am.purpose === 'CHANGE' ? am.db : am.rec.target;
+    if (!PRIMARY_DB[direct]) return '';
+    const to = normCode(am.values[PRIMARY_DB[direct]]); if (!to) return '';
+    if (am.purpose === 'CHANGE') { const f = am.rec.fields.find(x => x.h === PRIMARY_DB[direct]); if (f && normCode(f.value) === to) return ''; }
+    const now = am.primaryNow || {};
+    const others = Object.keys(PRIMARY_DB).filter(db => db !== direct && db in now && now[db] !== to);
+    if (!others.length) return '';
+    return 'Primary Code of this touchpoint will be changed to ' + to + ' in both ' + [direct].concat(others).map(db => DB_LABEL[db]).join(' and ') +
+      ' (' + others.map(db => DB_LABEL[db] + ' currently ' + (now[db] || 'blank')).join('; ') + ').';
   }
   async function drawAmendBrgy(f, i) {
     await loadBrgy();
@@ -1053,6 +1071,7 @@
         <tr class="section"><td colspan="2">${isChange ? 'Changes' : 'Add as ' + esc(am.rec.targetLabel)}</td></tr>
         ${ch.map(c => `<tr><td>${esc(c[0])}</td><td>${isChange ? `<s style="color:#999">${esc(c[1] || '—')}</s><br><b style="color:var(--brand)">${esc(c[2] || '—')}</b>` : `<b style="color:var(--brand)">${esc(c[2])}</b>`}</td></tr>`).join('')}
         ${am.justification.trim() ? `<tr><td>${isChange ? 'Justification' : 'Remarks'}</td><td>${esc(am.justification)}</td></tr>` : ''}
+        ${primaryRemark() ? `<tr><td>Remark</td><td style="color:var(--brand);font-weight:700">⚠ ${esc(primaryRemark())}</td></tr>` : ''}
         ${am.purpose !== 'CHANGE' ? `<tr><td>Proof</td><td>${(am.proofs || []).length ? (am.proofs.length + ' file(s): ' + am.proofs.map(p => esc(p.name)).join(', ')) : '—'}</td></tr>` : ''}
         <tr><td>Approver</td><td>Department (final)</td></tr></table>
       <div class="row-btns"><button class="btn ghost" id="backBtn">‹ Back</button><button class="btn" id="sendBtn">${am.resubmit ? 'Resend' : 'Confirm &amp; Send'}</button></div></div>`;

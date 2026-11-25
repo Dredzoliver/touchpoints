@@ -117,3 +117,18 @@ table.data.db tbody tr:hover td { background:#FAFAFA; }
 .pick b { display:block; font-size:34px; font-weight:800; margin-top:8px; font-variant-numeric:tabular-nums; }
 .pick small { display:block; color:var(--muted); font-size:13px; margin-top:2px; }
 .pick.dth { border-top-color:var(--brand); } .pick.loading { border-top-color:var(--yellow); } .pick.ott { border-top-color:#6B6B6B; }
+
+/* Admin tools */
+.rdbox { background:#FAFAFA; border:1px solid var(--line); border-radius:12px; padding:14px; }
+tr.rdform > td { background:#fff; }
+table.grid-edit td { padding:2px 3px; }
+table.grid-edit input { min-height:34px; padding:6px 8px; font-size:13px; border-radius:6px; border:1px solid transparent; background:transparent; min-width:120px; }
+table.grid-edit input:hover { border-color:var(--line); background:#fff; }
+table.grid-edit input:focus { border-color:var(--yellow); background:#fff; }
+table.grid-edit input.chg { background:#FFF3DD; border-color:var(--yellow); }
+table.grid-edit tr.del td { background:#FFE5E7; } table.grid-edit tr.del input { text-decoration:line-through; color:var(--muted); }
+table.grid-edit tr.add td { background:#FFFBF2; }
+table.grid-edit button.x { border:0; background:none; font-size:16px; cursor:pointer; color:var(--muted); padding:6px 10px; }
+table.grid-edit button.x:hover { color:var(--brand); }
+#pFile { min-height:0; border:1px dashed #BDBDBD; padding:14px; width:100%; max-width:520px; border-radius:10px; background:#FAFAFA; }
+.filters-row .f[hidden] { display:none; }

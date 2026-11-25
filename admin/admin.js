@@ -88,11 +88,13 @@
     // already loaded → show instantly; fresh data comes from ↻ Refresh, the 5-minute timer, or after a decision
     if (tab === 'dashboard') { if (dash) drawDashboard(); else renderDashboard(); }
     else if (tab === 'databases') renderDatabases();
+    else if (tab === 'tools') renderTools();
     else { if (apprLoaded) drawApprovals(); else renderApprovals(); }
   }
   function start() {
     $('#tabs').hidden = false; $('#logoutBtn').hidden = false;
     $('#who').textContent = (session.user.email || session.user.name) + ' · ' + session.user.role;
+    $('#toolsTab').hidden = session.user.role !== 'ADMIN';   // Admin tools: ADMIN account only
     show(); countApprovals();
     clearInterval(timer);
     timer = setInterval(() => { if (document.visibilityState !== 'visible') return; countApprovals(); if (tab === 'dashboard' && !$('.detail')) renderDashboard(true); else dash = null; }, 300000);   // every 5 minutes
@@ -410,6 +412,227 @@
       XLSX.writeFile(wb, `${D.label} - ${dbState.status === 'ACTIVE' ? 'Active' : 'Purged'}${parts.length ? ' - ' + parts.join(', ') : ''} - ${day}.xlsx`.replace(/[\\/:*?"<>|]/g, '-'));
     } catch (e) { toast(e.message, 5000); }
     finally { b.disabled = false; b.innerHTML = label; }
+  }
+
+  /* ======================= ADMIN TOOLS (ADMIN only) ======================= */
+  let toolsSection = 'purge';
+  const TOOL_TABS = [['purge', 'Bulk purge'], ['redirect', 'Redirect a request'], ['tables', 'Edit tables'], ['status', 'System status']];
+  function renderTools() {
+    view.innerHTML = `<div class="head"><h2>Admin tools</h2></div>
+      <div class="seg">${TOOL_TABS.map(([k, l]) => `<button data-tool="${k}" class="${toolsSection === k ? 'on' : ''}">${l}</button>`).join('')}</div>
+      <div id="toolBody"></div>`;
+    view.querySelectorAll('[data-tool]').forEach(b => b.onclick = () => { toolsSection = b.dataset.tool; renderTools(); });
+    ({ purge: toolPurge, redirect: toolRedirect, tables: toolTables, status: toolStatus })[toolsSection]();
+  }
+  const body = () => $('#toolBody');
+
+  /* ---------- Bulk purge ---------- */
+  const purge = { db: '', codes: [], file: '', preview: null };
+  function toolPurge() {
+    const p = purge;
+    body().innerHTML = `<section class="block"><h3>1 · Which database?</h3>
+        <div class="seg">${DB_TABS.map(([k, l]) => `<button data-pdb="${k}" class="${p.db === k ? 'on' : ''}">${l}</button>`).join('')}</div></section>
+      <section class="block" ${p.db ? '' : 'hidden'}><h3>2 · Sales Codes to purge</h3>
+        <p class="hint" style="margin-top:0">Upload an Excel or CSV file with a <b>SALESCODE</b> column (or the codes in the first column), or paste the codes below — one per line.</p>
+        <input type="file" id="pFile" accept=".xlsx,.xls,.csv,.txt">
+        ${p.file ? `<div class="hint ok">✓ ${esc(p.file)} — ${fmtN(p.codes.length)} code(s) read</div>` : ''}
+        <label for="pPaste">…or paste codes</label><textarea id="pPaste" rows="4" placeholder="ABC1234526&#10;XYZ0001226">${p.file ? '' : esc(p.codes.join('\n'))}</textarea>
+        <button class="btn dark" id="pPrev" style="max-width:260px;margin-top:12px">Check the list</button></section>
+      <div id="pResult"></div>`;
+    view.querySelectorAll('[data-pdb]').forEach(b => b.onclick = () => { p.db = b.dataset.pdb; p.preview = null; toolPurge(); });
+    if (!p.db) return;
+    $('#pFile').onchange = async e => {
+      const f = e.target.files[0]; if (!f) return;
+      try {
+        await loadXlsx();
+        const wb = XLSX.read(await f.arrayBuffer(), { type: 'array' });
+        const aoa = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: false, defval: '' });
+        let ci = (aoa[0] || []).findIndex(h => /SALES\s*CODE/i.test(String(h)));
+        const start = ci >= 0 ? 1 : 0; if (ci < 0) ci = 0;
+        p.codes = aoa.slice(start).map(r => String(r[ci] || '').trim()).filter(Boolean);
+        p.file = f.name; p.preview = null; toolPurge();
+      } catch (err) { toast('Could not read the file: ' + err.message, 5000); }
+    };
+    $('#pPaste').oninput = e => { p.file = ''; p.codes = e.target.value.split(/[\s,;]+/).map(x => x.trim()).filter(Boolean); };
+    $('#pPrev').onclick = async () => {
+      if (!p.codes.length) return toast('Add the Sales Codes first.');
+      const b = $('#pPrev'); b.disabled = true; b.innerHTML = '<span class="spinner"></span>Checking…';
+      try { p.preview = await api('adminPurgePreview', { token: session.portalToken, db: p.db, codes: p.codes }, 120000); drawPurgePreview(); }
+      catch (e) { toast(e.message, 5000); } finally { b.disabled = false; b.innerHTML = 'Check the list'; }
+    };
+    if (p.preview) drawPurgePreview();
+  }
+  function drawPurgePreview() {
+    const r = purge.preview, n = r.purge.length;
+    $('#pResult').innerHTML = `<section class="block"><h3>3 · Check and confirm</h3>
+      <div class="stats">
+        <div class="stat dth"><div class="lbl">Will be tagged PURGED</div><div class="num">${fmtN(n)}</div><div class="sub">found in ${esc(r.label)}</div></div>
+        <div class="stat"><div class="lbl">Already purged</div><div class="num">${fmtN(r.already.length)}</div><div class="sub">no change</div></div>
+        <div class="stat"><div class="lbl">Not found</div><div class="num">${fmtN(r.notFound.length)}</div><div class="sub">not in ${esc(r.label)}</div></div>
+        <div class="stat"><div class="lbl">Repeated in the list</div><div class="num">${fmtN(r.repeated.length)}</div><div class="sub">counted once</div></div>
+      </div>
+      ${r.notFound.length ? `<p class="hint bad" style="margin-top:12px">Not found: ${r.notFound.slice(0, 60).map(esc).join(', ')}${r.notFound.length > 60 ? ' …' : ''}</p>` : ''}
+      ${n ? `<div class="expand scroll" style="max-height:340px"><table class="data"><thead><tr><th>Sales Code</th><th>Partner</th><th>Name</th><th>Status now</th></tr></thead><tbody>
+          ${r.purge.slice(0, 500).map(x => `<tr><td><b>${esc(x.code)}</b></td><td>${esc(x.partner)}</td><td>${esc(x.name)}</td><td>${esc(x.status)}</td></tr>`).join('')}</tbody></table></div>
+        ${n > 500 ? `<p class="hint">Showing the first 500 of ${fmtN(n)}.</p>` : ''}
+        <button class="btn" id="pApply" style="max-width:360px;margin-top:14px">Tag ${fmtN(n)} record${n === 1 ? '' : 's'} as PURGED</button>` : '<div class="notice warn" style="margin-top:12px">Nothing to purge in this list.</div>'}
+    </section>`;
+    const a = $('#pApply'); if (a) a.onclick = async () => {
+      if (!confirm(`Tag ${n} ${r.label} record(s) as PURGED with today's date?\n\nThis is recorded in the ADMIN LOG.`)) return;
+      a.disabled = true; a.innerHTML = '<span class="spinner"></span>Purging…';
+      try {
+        const res = await api('adminPurgeApply', { token: session.portalToken, db: purge.db, codes: purge.codes }, 300000);
+        ['ACTIVE', 'PURGED'].forEach(s2 => { delete DBC[purge.db + ':' + s2]; IDB.put(purge.db + ':' + s2, null); });
+        dash = null;
+        $('#pResult').innerHTML = `<div class="notice ok"><b>Done</b>${esc(res.message)}</div>`;
+        purge.codes = []; purge.file = ''; purge.preview = null;
+      } catch (e) { toast(e.message, 6000); a.disabled = false; a.innerHTML = `Tag ${fmtN(n)} records as PURGED`; }
+    };
+  }
+
+  /* ---------- Redirect a request ---------- */
+  let people = null;
+  async function toolRedirect() {
+    body().innerHTML = `<p class="hint"><span class="spinner"></span>Loading requests waiting for approval…</p>`;
+    let items;
+    try {
+      const [a, b] = await Promise.all([api('adminPending', { token: session.portalToken }, 60000), people ? { people } : api('adminApprovers', { token: session.portalToken }, 60000)]);
+      items = a.items; people = b.people;
+    } catch (e) { body().innerHTML = `<div class="notice bad">${esc(e.message)}</div>`; return; }
+    if (tab !== 'tools' || toolsSection !== 'redirect') return;
+    body().innerHTML = `<section class="block"><h3>Requests waiting for an approver</h3>
+      <p class="hint" style="margin-top:0">Use this when the approver can't act (e.g. on leave) and the user asked you by call, text or email. The new approver gets the email; the old link stops working.</p>
+      ${items.length ? `<div class="expand scroll"><table class="data"><thead><tr><th>Request</th><th>Partner · Requestor</th><th>Now with</th><th>Waiting</th><th></th></tr></thead><tbody>
+        ${items.map((i, n) => `<tr><td><b>${esc(i.trade || i.salescode)}</b><small>${esc(i.id)} · ${esc(i.action)}</small></td>
+          <td>${esc(i.partner)}<small>${esc(i.requestor)}</small></td>
+          <td>${esc(i.approver)} <span class="muted">(${esc(i.role)})</span><small>${esc(i.email)} · step ${esc(i.step)}${i.redirected ? ' · redirected before' : ''}</small></td>
+          <td class="${i.waitingDays >= 3 ? 'late' : ''}">${days(i.waitingDays)}</td>
+          <td><button class="refresh" data-rd="${n}">Redirect…</button></td></tr>
+          <tr class="rdform" id="rd${n}" hidden><td colspan="5"></td></tr>`).join('')}</tbody></table></div>`
+        : '<div class="empty"><div class="big">✓</div><b>No requests are waiting for an approver.</b></div>'}</section>`;
+    view.querySelectorAll('[data-rd]').forEach(b => b.onclick = () => openRedirect(items[Number(b.dataset.rd)], Number(b.dataset.rd)));
+  }
+  function openRedirect(i, n) {
+    view.querySelectorAll('.rdform').forEach(r => { r.hidden = true; r.firstElementChild.innerHTML = ''; });
+    const row = $('#rd' + n); row.hidden = false;
+    row.firstElementChild.innerHTML = `<div class="rdbox">
+      <b>Redirect ${esc(i.id)}</b> — now with ${esc(i.approver)} (${esc(i.role)})
+      <div class="filters-row" style="margin:10px 0 0">
+        <label class="f grow"><span>New approver</span><select id="rdWho"><option value="">— choose —</option>
+          ${people.filter(p2 => p2.name.toUpperCase() !== i.approver.toUpperCase()).map((p2, k) => `<option value="${k}">${esc(p2.name)} · ${esc(p2.position)} · ${esc(p2.email)}</option>`).join('')}
+          <option value="other">Someone else (type name and email)…</option></select></label>
+        <label class="f" id="rdNameL" hidden><span>Name</span><input id="rdName" type="text"></label>
+        <label class="f" id="rdEmailL" hidden><span>Office email</span><input id="rdEmail" type="email"></label>
+      </div>
+      <label for="rdWhy">Reason <span class="req">*</span></label>
+      <textarea id="rdWhy" rows="2" placeholder="e.g. RSM on leave until Dec 5 — requested by Juan (TSM) via call"></textarea>
+      <div class="row-btns" style="max-width:520px"><button class="btn ghost" id="rdCancel">Cancel</button><button class="btn" id="rdGo">Redirect</button></div></div>`;
+    const list = people.filter(p2 => p2.name.toUpperCase() !== i.approver.toUpperCase());
+    $('#rdWho').onchange = e => { const o = e.target.value === 'other'; $('#rdNameL').hidden = !o; $('#rdEmailL').hidden = !o; };
+    $('#rdCancel').onclick = () => { row.hidden = true; };
+    $('#rdGo').onclick = async () => {
+      const w = $('#rdWho').value, reason = $('#rdWhy').value.trim();
+      const to = w === 'other' ? { name: $('#rdName').value.trim(), email: $('#rdEmail').value.trim() } : w !== '' ? list[Number(w)] : null;
+      if (!to || !to.name || !to.email) return toast('Choose the new approver.');
+      if (!reason) return toast('Please write the reason.');
+      if (!confirm(`Redirect ${i.id} from ${i.approver} to ${to.name}?`)) return;
+      const b = $('#rdGo'); b.disabled = true; b.innerHTML = '<span class="spinner"></span>Redirecting…';
+      try { const r = await api('adminRedirect', { token: session.portalToken, id: i.id, s: i.s, v: i.v, toName: to.name, toEmail: to.email, reason }, 90000);
+        toast(r.message, 5000); dash = null; toolRedirect(); }
+      catch (e) { toast(e.message, 6000); b.disabled = false; b.innerHTML = 'Redirect'; }
+    };
+  }
+
+  /* ---------- Edit tables ---------- */
+  const ed = { table: '', data: null, edits: {}, adds: [], dels: new Set() };
+  const TABLES = [['ROUTING MATRIX', 'Routing Matrix'], ['CODE MATRIX', 'Code Matrix'], ['CLASS MAP', 'Class Map']];
+  const colLetter = i => { let s2 = ''; i++; while (i) { const m = (i - 1) % 26; s2 = String.fromCharCode(65 + m) + s2; i = Math.floor((i - 1) / 26); } return s2; };
+  const pending = () => Object.keys(ed.edits).length + ed.adds.filter(r => r.some(Boolean)).length + ed.dels.size;
+  async function toolTables(reload) {
+    if (!ed.table) {
+      body().innerHTML = `<section class="block"><h3>Which table?</h3><div class="seg">${TABLES.map(([k, l]) => `<button data-tb="${k}">${l}</button>`).join('')}</div>
+        <p class="hint">Changes are saved straight to the sheet and written to the ADMIN LOG.</p></section>`;
+      view.querySelectorAll('[data-tb]').forEach(b => b.onclick = () => { ed.table = b.dataset.tb; ed.data = null; toolTables(); });
+      return;
+    }
+    if (!ed.data || reload) {
+      body().innerHTML = `<p class="hint"><span class="spinner"></span>Loading ${esc(ed.table)}…</p>`;
+      try { ed.data = await api('adminTableGet', { token: session.portalToken, table: ed.table }, 60000); ed.edits = {}; ed.adds = []; ed.dels = new Set(); }
+      catch (e) { body().innerHTML = `<div class="notice bad">${esc(e.message)}</div>`; return; }
+    }
+    drawTable();
+  }
+  function drawTable() {
+    const d = ed.data, w = d.header.length;
+    const cell = (r, c, v) => `<td><input data-r="${r}" data-c="${c}" value="${esc(ed.edits[r + ':' + c] != null ? ed.edits[r + ':' + c] : v)}" class="${ed.edits[r + ':' + c] != null ? 'chg' : ''}"></td>`;
+    body().innerHTML = `<section class="block">
+      <div class="bar"><button class="refresh" id="tbBack">‹ Tables</button><h2 style="font-size:18px">${esc(d.table)}</h2>
+        <input type="search" id="tbQ" placeholder="Find…" style="max-width:220px;min-height:40px;padding:8px 10px;font-size:14px"></div>
+      <p class="hint" style="margin-top:0">${esc(d.note)}</p>
+      <div class="tablewrap" style="max-height:62vh"><table class="data db grid-edit"><thead><tr><th>#</th>${d.header.map((h, c) => `<th>${colLetter(c)} · ${esc(h || '(blank)')}</th>`).join('')}${d.rowDelete ? '<th></th>' : ''}</tr></thead><tbody>
+        ${d.rows.map((r, i) => `<tr data-row="${i}" class="${ed.dels.has(i) ? 'del' : ''}"><td class="muted">${i + 2}</td>${Array.from({ length: w }, (_, c) => cell(i, c, r[c] || '')).join('')}
+          ${d.rowDelete ? `<td><button class="x" data-del="${i}" title="Delete row">${ed.dels.has(i) ? '↺' : '✕'}</button></td>` : ''}</tr>`).join('')}
+        ${ed.adds.map((r, k) => `<tr class="add"><td class="muted">new</td>${Array.from({ length: w }, (_, c) => `<td><input data-a="${k}" data-c="${c}" value="${esc(r[c] || '')}" class="chg"></td>`).join('')}${d.rowDelete ? `<td><button class="x" data-rmadd="${k}">✕</button></td>` : ''}</tr>`).join('')}
+      </tbody></table></div>
+      <div class="listbar" style="margin-top:12px"><button class="refresh" id="tbAdd">+ Add row</button><span style="flex:1"></span>
+        <span id="tbCount" class="muted">${pending() ? pending() + ' unsaved change(s)' : 'No changes'}</span>
+        <button class="refresh" id="tbUndo" ${pending() ? '' : 'disabled'}>Discard</button>
+        <button class="btn mini" id="tbSave" ${pending() ? '' : 'disabled'}>Save changes</button></div></section>`;
+    const upd = () => { const n = pending(); $('#tbCount').textContent = n ? n + ' unsaved change(s)' : 'No changes'; $('#tbSave').disabled = !n; $('#tbUndo').disabled = !n; };
+    body().querySelectorAll('input[data-r]').forEach(inp => inp.oninput = () => {
+      const r = Number(inp.dataset.r), c = Number(inp.dataset.c), k = r + ':' + c, orig = d.rows[r][c] || '';
+      if (inp.value === orig) { delete ed.edits[k]; inp.classList.remove('chg'); } else { ed.edits[k] = inp.value; inp.classList.add('chg'); }
+      upd();
+    });
+    body().querySelectorAll('input[data-a]').forEach(inp => inp.oninput = () => { ed.adds[Number(inp.dataset.a)][Number(inp.dataset.c)] = inp.value; upd(); });
+    body().querySelectorAll('[data-del]').forEach(b => b.onclick = () => { const i = Number(b.dataset.del); ed.dels.has(i) ? ed.dels.delete(i) : ed.dels.add(i); drawTable(); });
+    body().querySelectorAll('[data-rmadd]').forEach(b => b.onclick = () => { ed.adds.splice(Number(b.dataset.rmadd), 1); drawTable(); });
+    $('#tbAdd').onclick = () => { ed.adds.push(new Array(w).fill('')); drawTable(); const last = body().querySelector('tr.add:last-child input'); if (last) last.focus(); };
+    $('#tbBack').onclick = () => { if (pending() && !confirm('Discard your unsaved changes?')) return; ed.table = ''; ed.data = null; toolTables(); };
+    $('#tbUndo').onclick = () => { if (confirm('Discard all unsaved changes?')) { ed.edits = {}; ed.adds = []; ed.dels = new Set(); drawTable(); } };
+    $('#tbQ').oninput = e => { const q = e.target.value.trim().toUpperCase();
+      body().querySelectorAll('tr[data-row]').forEach(tr => { tr.hidden = q && ![...tr.querySelectorAll('input')].some(x => x.value.toUpperCase().includes(q)); }); };
+    $('#tbSave').onclick = async () => {
+      const edits = Object.entries(ed.edits).map(([k, v]) => { const [r, c] = k.split(':').map(Number); return { r, c, v }; });
+      const adds = ed.adds.filter(r => r.some(Boolean)), deletes = [...ed.dels];
+      if (!confirm(`Save to ${d.table}?\n\n${edits.length} cell(s) changed · ${adds.length} row(s) added · ${deletes.length} row(s) deleted`)) return;
+      const b = $('#tbSave'); b.disabled = true; b.innerHTML = '<span class="spinner"></span>Saving…';
+      try { const r = await api('adminTableSave', { token: session.portalToken, table: d.table, sig: d.sig, edits, adds, deletes }, 120000); toast(r.message, 5000); toolTables(true); }
+      catch (e) { toast(e.message, 7000); b.disabled = false; b.innerHTML = 'Save changes'; }
+    };
+  }
+
+  /* ---------- System status ---------- */
+  async function toolStatus(data) {
+    if (!data) {
+      body().innerHTML = `<p class="hint"><span class="spinner"></span>Checking…</p>`;
+      try { data = await api('adminStatus', { token: session.portalToken }, 60000); }
+      catch (e) { body().innerHTML = `<div class="notice bad">${esc(e.message)}</div>`; return; }
+      if (tab !== 'tools' || toolsSection !== 'status') return;
+    }
+    const o = data.outbox;
+    body().innerHTML = `<section class="block"><h3>Email</h3>
+        <div class="stats">
+          <div class="stat ${data.emailsLeft <= 15 ? 'dth' : ''}"><div class="lbl">Emails left today</div><div class="num">${fmtN(data.emailsLeft)}</div><div class="sub">${data.reserve} kept for alerts</div></div>
+          <div class="stat"><div class="lbl">On hold (waiting to send)</div><div class="num">${fmtN(o.pending)}</div><div class="sub">resent every hour automatically</div></div>
+          <div class="stat"><div class="lbl">Failed</div><div class="num">${fmtN(o.failed)}</div><div class="sub">gave up after 12 tries</div></div>
+          <div class="stat"><div class="lbl">Sent from hold today</div><div class="num">${fmtN(o.sentToday)}</div><div class="sub">&nbsp;</div></div>
+        </div>
+        ${o.items.length ? `<div class="expand scroll" style="max-height:300px"><table class="data"><thead><tr><th>Held since</th><th>Request</th><th>To</th><th>Status</th><th>Last error</th></tr></thead><tbody>
+          ${o.items.map(x => `<tr><td>${x.at ? new Date(x.at).toLocaleString() : ''}</td><td>${esc(x.id)}<small>${esc(x.subject)}</small></td><td>${esc(x.to)}</td><td>${esc(x.status)} <span class="muted">(${esc(x.attempts)} tries)</span></td><td><small>${esc(x.error)}</small></td></tr>`).join('')}
+          </tbody></table></div>` : '<p class="hint">No emails on hold. ✓</p>'}
+        <button class="refresh" id="stRetry" style="margin-top:10px" ${o.pending ? '' : 'disabled'}>Send held emails now</button>
+        <p class="hint">Hourly timers: resend held emails ${data.triggers.retryEmails ? '✓' : '✗ <b>missing — run setup()</b>'} · move requests when a partner changes TSM ${data.triggers.syncAssignments ? '✓' : '✗ <b>missing — run setup()</b>'}</p>
+      </section>
+      <section class="block"><h3>Partners with no TSM (${fmtN(data.noTsm.length)})</h3>
+        <p class="hint" style="margin-top:0">In GRID but with no user (or a TBH) in HANDLES. Their requests can't be transferred automatically.</p>
+        ${data.noTsm.length ? `<div class="expand scroll" style="max-height:300px"><table class="data"><thead><tr><th>Partner</th><th>HANDLES</th></tr></thead><tbody>
+          ${data.noTsm.map(x => `<tr><td>${esc(x.partner)}</td><td>${esc(x.handles)}</td></tr>`).join('')}</tbody></table></div>` : '<p class="hint">Every partner has a TSM. ✓</p>'}
+      </section>
+      <button class="refresh" id="stReload">↻ Refresh</button>`;
+    $('#stReload').onclick = () => toolStatus();
+    const r = $('#stRetry'); if (r) r.onclick = async () => { r.disabled = true; r.innerHTML = '<span class="spinner"></span>Sending…';
+      try { toolStatus(await api('adminRetryEmails', { token: session.portalToken }, 300000)); toast('Done.'); } catch (e) { toast(e.message, 5000); r.disabled = false; r.innerHTML = 'Send held emails now'; } };
   }
 
   if (!CFG.API_URL) view.innerHTML = '<div class="notice bad">API_URL is not set in config.js.</div>';

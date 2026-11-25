@@ -15,7 +15,7 @@
   };
   let session = store.get('adminSession');   // { portalToken, user:{name, role} }
   let tab = 'dashboard', dash = null, open = { NEW: '', AMEND: '' }, timer = null;
-  let apprItems = [], apprFilter = 'ALL';
+  let apprItems = [], apprFilter = 'ALL', apprLoaded = false;
 
   function toast(msg, ms) { const t = $('#toast'); t.textContent = msg; t.style.display = 'block'; clearTimeout(toast._t); toast._t = setTimeout(() => { t.style.display = 'none'; }, ms || 3500); }
   async function api(action, data, timeout) {
@@ -75,7 +75,7 @@
     }
   }
   function logout(silent) {
-    session = null; store.del('adminSession'); clearInterval(timer);
+    session = null; store.del('adminSession'); clearInterval(timer); dash = null; apprItems = []; apprLoaded = false;
     try { if (window.google && google.accounts) google.accounts.id.disableAutoSelect(); } catch (e) {}
     renderLogin(silent ? '' : 'You have signed out.');
   }
@@ -85,14 +85,16 @@
   document.querySelectorAll('#tabs [data-tab]').forEach(b => b.onclick = () => { tab = b.dataset.tab; show(); });
   function show() {
     document.querySelectorAll('#tabs [data-tab]').forEach(b => b.classList.toggle('on', b.dataset.tab === tab));
-    if (tab === 'dashboard') renderDashboard(); else renderApprovals();
+    // already loaded → show instantly; fresh data comes from ↻ Refresh, the 5-minute timer, or after a decision
+    if (tab === 'dashboard') { if (dash) drawDashboard(); else renderDashboard(); }
+    else { if (apprLoaded) drawApprovals(); else renderApprovals(); }
   }
   function start() {
     $('#tabs').hidden = false; $('#logoutBtn').hidden = false;
     $('#who').textContent = (session.user.email || session.user.name) + ' · ' + session.user.role;
     show(); countApprovals();
     clearInterval(timer);
-    timer = setInterval(() => { if (document.visibilityState !== 'visible') return; countApprovals(); if (tab === 'dashboard' && !$('.detail')) renderDashboard(true); }, 300000);   // every 5 minutes
+    timer = setInterval(() => { if (document.visibilityState !== 'visible') return; countApprovals(); if (tab === 'dashboard' && !$('.detail')) renderDashboard(true); else dash = null; }, 300000);   // every 5 minutes
   }
 
   /* ---------- DASHBOARD ---------- */
@@ -156,12 +158,13 @@
 
   /* ---------- APPROVALS (what is waiting for this login, e.g. DEPT) ---------- */
   async function countApprovals() {
-    try { apprItems = (await api('portalInbox', { token: session.portalToken }, 45000)).items;
+    try { apprItems = (await api('portalInbox', { token: session.portalToken }, 45000)).items; apprLoaded = true;
+      if (tab === 'approvals' && $('#apprRefresh')) drawApprovals();
       const c = $('#apprCount'); c.textContent = apprItems.length; c.hidden = !apprItems.length; } catch (e) {}
   }
   async function renderApprovals() {
     view.innerHTML = `<p class="hint"><span class="spinner"></span>Loading requests waiting for you…</p>`;
-    try { apprItems = (await api('portalInbox', { token: session.portalToken }, 45000)).items; }
+    try { apprItems = (await api('portalInbox', { token: session.portalToken }, 45000)).items; apprLoaded = true; }
     catch (e) { view.innerHTML = `<div class="notice bad">${esc(e.message)}</div>`; return; }
     if (tab !== 'approvals') return;
     const c = $('#apprCount'); c.textContent = apprItems.length; c.hidden = !apprItems.length;
@@ -233,6 +236,7 @@
       view.innerHTML = `<div class="card center" style="max-width:520px;margin:30px auto"><div class="done-mark">${d === 'APPROVE' ? '✅' : d === 'RETURN' ? '↩️' : '⛔'}</div>
         <h2>${esc(r.id)}</h2><p>${esc(res.message)}</p><button class="btn" id="apprNext">Back to Approvals</button></div>`;
       $('#apprNext').onclick = () => renderApprovals(); countApprovals();
+      dash = null;   // counts changed — the dashboard reloads next time it is opened
     } catch (e) {
       toast(e.message, 5000);
       view.querySelectorAll('[data-d]').forEach(b => { b.disabled = false; });

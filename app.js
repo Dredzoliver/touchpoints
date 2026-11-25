@@ -105,7 +105,7 @@
     $('#installBtn').hidden = true;
     const x = document.createElement('button');
     x.textContent = '✕'; x.setAttribute('aria-label', 'Hide');
-    x.style.cssText = 'margin-left:auto;background:none;color:#7a5200;border:0;font-size:18px;padding:4px 8px';
+    x.style.cssText = 'margin-left:auto;background:none;color:#4A4A4A;border:0;font-size:18px;padding:4px 8px';
     x.onclick = () => { bar.hidden = true; ls.set('iosHintHiddenUntil', Date.now() + 7 * 864e5); };
     bar.appendChild(x);
     bar.hidden = false;
@@ -231,7 +231,13 @@
     const hasDraft = !!(await DB.get('draft', 'current').catch(() => null));
     const loadedAt = boot && boot.loadedAt ? new Date(boot.loadedAt) : null;
     const today = loadedAt && loadedAt.toDateString() === new Date().toDateString();
+    const waiting = queue.filter(q => !q.error).length, problems = queue.length - waiting;
     view.innerHTML = `
+      ${waiting ? `<div class="unsent" id="unsentBanner"><span class="n">${waiting}</span><div>
+          <b>${waiting} request${waiting === 1 ? '' : 's'} not sent yet</b>
+          <small class="hint" style="display:block;margin:2px 0 0">${navigator.onLine ? 'Keep the app open until it says Sent ✓' : 'Open this app again once you have signal — they send automatically.'}</small></div>
+          ${navigator.onLine ? '<button class="btn" id="bannerSendBtn">⬆ Send</button>' : ''}</div>` : ''}
+      ${problems ? `<div class="notice bad"><b>${problems} saved request${problems === 1 ? ' was' : 's were'} not accepted</b>See the reason below, then fix or discard ${problems === 1 ? 'it' : 'them'}.</div>` : ''}
       <div class="notice ${!boot ? 'bad' : today ? 'ok' : 'warn'}">${!boot ? '✗ Partner list not loaded — connect to the internet.'
         : (today ? '✓ ' : '⚠ ') + boot.partners.length + ' partner(s) ready · updated ' +
           (today ? 'today ' + loadedAt.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : loadedAt.toLocaleDateString()) +
@@ -262,6 +268,7 @@
       await DB.del('queue', b.dataset.discard); render();
     });
     const sn = $('#sendNowBtn'); if (sn) sn.onclick = () => sync(true);
+    const bs = $('#bannerSendBtn'); if (bs) bs.onclick = () => sync(true);
   }
 
   /* ---------- 1. PARTNER ---------- */
@@ -334,7 +341,12 @@
         draft.brgyDetected = d.brgy || '';
         if (!draft.street) draft.street = d.street || '';
         draft.full = d.full || '';
-        if (draft.locate.status === 'OK') { draft.gridMuni = draft.locate.match.muni; draft.gridProv = draft.locate.match.prov; }
+        // pre-select the GPS town only if it is one of the partner's municipalities; otherwise the rep chooses
+        if (draft.locate.status === 'OK') {
+          const m = draft.locate.match;
+          draft.gridMuni = m ? m.muni : ''; draft.gridProv = m ? m.prov : '';
+          draft.brgy = ''; draft.brgyOther = false;
+        }
       } catch (e) {
         if (!isNetErr(e)) { view.innerHTML = `${stepsBar()}<div class="card"><div class="notice bad">${esc(e.message)}</div>${navBtns('Next ›', true, 'photo')}</div>`; bindBack(); return; }
         draft.locate = null; draft.offline = true;
@@ -347,18 +359,21 @@
 
     const L = draft.locate, st = draft.offline ? 'OFFLINE' : L.status;
     const options = st === 'OFFLINE' ? p.areas : (L.options || []);
-    const sel = options.length ? `<label for="muniSel">${st === 'CONFIRM_MUNI' ? 'Confirm municipality' : 'Municipality'} <span class="req">*</span></label>
-      <select id="muniSel"><option value="">— Select municipality —</option>
+    const det = L && L.detected ? L.detected : {};
+    const ncr = !!det.ncr;
+    const provName = ncr ? 'Metro Manila' : (det.gridProv || '');
+    const sel = options.length ? `<label for="muniSel">Municipality <span class="req">*</span></label>
+      <select id="muniSel"><option value="">— Select ${esc(draft.partner)}'s municipality —</option>
       ${groupByProv(options).map(([prov, list]) => `<optgroup label="${esc(prov)}">${list.map(a => {
         const v = a.muni + '|' + a.prov; return `<option value="${esc(v)}" ${v === draft.gridMuni + '|' + draft.gridProv ? 'selected' : ''}>${esc(a.muni)}</option>`; }).join('')}</optgroup>`).join('')}
-      </select>` : '';
-    const det = L && L.detected ? L.detected : {};
+      </select>
+      <div class="hint">Only ${esc(draft.partner)}'s municipalities${st === 'OK' ? ' in ' + esc(provName) : ''} are listed.</div>
+      <label>Province</label><div id="provOut" class="hint" style="font-size:16px;color:var(--ink);font-weight:700;margin-top:0">${esc(draft.gridProv || '—')}</div>
+      ${ncr ? '<div class="hint">Metro Manila: the province follows the municipality you choose.</div>' : ''}` : '';
     let box = '';
-    const ncrNote = det.ncrAligned ? `<br><small>Within Metro Manila — province set to ${esc(L.match.prov)}, ${esc(draft.partner)}'s NCR province (GPS district: ${esc(det.gridProv)}).</small>` : '';
-    const nearNote = det.mappedBy === 'nearest' ? `<br><small>GPS town “${esc(det.city)}” is not in GRID, so it was matched to the nearest GRID municipality (${esc(det.distanceKm)} km away).</small>` : '';
-    if (st === 'OK') box = `<div class="notice ok"><b>✓ Location verified</b>${esc(L.match.muni)}, ${esc(L.match.prov)} is within ${esc(draft.partner)}'s coverage.${ncrNote}${nearNote}
-      <br><small>You can change the municipality below if needed (${esc(draft.partner)}'s municipalities in this province).</small></div>`;
-    else if (st === 'CONFIRM_MUNI') box = `<div class="notice warn"><b>Please confirm the municipality</b>GPS shows <b style="display:inline">${esc(det.city || det.gridMuni)}</b>, which is not in ${esc(draft.partner)}'s assigned municipalities for ${esc(/^NCR|^MANILA$/i.test(det.gridProv || '') ? 'Metro Manila' : det.gridProv)}. Choose the correct one below.${nearNote}</div>`;
+    const gpsTown = det.city || det.gridMuni;
+    if (st === 'OK') box = `<div class="notice ok"><b>✓ Province verified: ${esc(provName)}</b>Within ${esc(draft.partner)}'s coverage.
+      ${gpsTown ? `<br><small>GPS town: ${esc(gpsTown)}${L.match ? ' — selected below. Change it if needed.' : ` — not one of ${esc(draft.partner)}'s municipalities. Choose the municipality below.`}</small>` : ''}</div>`;
     else if (st === 'OUT_OF_COVERAGE') box = `<div class="notice bad"><b>✗ Cannot proceed</b>This location (${esc(det.city)}, ${esc(det.gridProv || det.province)}) is not within the coverage of ${esc(draft.partner)}.
       ${L.coverage && L.coverage.length ? `<br>Coverage: ${esc(L.coverage.join(', '))}` : ''}</div>`;
     else if (st === 'UNVERIFIED') box = `<div class="notice warn"><b>Address could not be identified</b>Choose the municipality. Head office will verify it.</div>`;
@@ -383,6 +398,7 @@
     if ($('#muniSel')) $('#muniSel').onchange = e => {
       const [m, pv] = e.target.value.split('|'); draft.gridMuni = m || ''; draft.gridProv = pv || '';
       draft.brgy = ''; draft.brgyOther = false; saveDraft(); renderBrgy();   // new town → new barangay list
+      const po = $('#provOut'); if (po) po.textContent = draft.gridProv || '—';  // province follows the municipality
     };
     renderBrgy();
     $('#street').oninput = e => { draft.street = e.target.value; saveDraft(); };
@@ -467,7 +483,8 @@
       ${t.dth ? `<h3>DTH Acquisition</h3>
         <label for="dthClass">DTH Acquisition Class <span class="req">*</span></label><select id="dthClass">${opts(boot.dthClasses, draft.dthClass)}</select>
         <label for="owner">Owner Name / CS Email <span class="req">*</span></label><input type="text" id="owner" value="${esc(draft.owner)}">
-        <label for="contact">Contact Number <span class="req">*</span></label><input type="tel" id="contact" value="${esc(draft.contact)}" placeholder="09XX XXX XXXX">` : ''}
+        <label for="contact">Contact Number <span class="req">*</span></label><input type="tel" id="contact" inputmode="numeric" maxlength="13" value="${esc(draft.contact)}" placeholder="09XXXXXXXXX">
+        <div class="hint" id="contactHint">11-digit mobile number starting with 0</div>` : ''}
       ${t.loading ? `<h3>Loading</h3>
         <label for="loadingClass">Loading Classification <span class="req">*</span></label><select id="loadingClass">${opts(boot.loadingClasses, draft.loadingClass)}</select>
         <label for="loadingPrimary">Primary Code <span class="hint" style="display:inline">(optional)</span></label>
@@ -478,12 +495,25 @@
         <label for="ottPrimary">Primary Salescode <span class="hint" style="display:inline">(optional)</span></label>
         <input type="text" id="ottPrimary" value="${esc(draft.ottPrimary)}" autocapitalize="characters" spellcheck="false">` : ''}
       ${navBtns('Next ›', false, 'type')}</div>`;
-    const bind = (id, prop) => { const el = $('#' + id); if (el) el.oninput = el.onchange = () => { draft[prop] = el.value; saveDraft(); if (id === 'loadingPrimary') checkPrimary(); }; };
+    const bind = (id, prop) => { const el = $('#' + id); if (el) el.oninput = el.onchange = () => { draft[prop] = el.value; saveDraft(); if (id === 'loadingPrimary') checkPrimary(); if (id === 'contact') mobileHint(el, $('#contactHint')); }; };
+    if ($('#contact') && draft.contact) mobileHint($('#contact'), $('#contactHint'));
     [['tradeName', 'tradeName'], ['dthClass', 'dthClass'], ['owner', 'owner'], ['contact', 'contact'], ['loadingClass', 'loadingClass'],
      ['loadingPrimary', 'loadingPrimary'], ['ottClass', 'ottClass'], ['ottPrimary', 'ottPrimary']].forEach(([a, b]) => bind(a, b));
     if (t.loading) checkPrimary();
     bindBack();
     $('#nextBtn').onclick = () => { const miss = detailsProblem(); if (miss) { toast(miss); return; } go(draft.resubmit ? 'review' : 'agree'); };
+  }
+  // Mobile number: 11 digits starting with 0 (spaces or dashes are ignored)
+  const mobileDigits = s => String(s || '').replace(/[\s\-().]/g, '');
+  const mobileOk = s => /^0\d{10}$/.test(mobileDigits(s));
+  function mobileHint(inp, h) {
+    if (!h) return;
+    const d = mobileDigits(inp.value);
+    if (!d) { h.className = 'hint'; h.textContent = '11-digit mobile number starting with 0'; inp.classList.remove('invalid'); return; }
+    const ok = mobileOk(d);
+    h.className = 'hint ' + (ok ? 'ok' : 'bad');
+    h.textContent = ok ? '✓ Valid mobile number' : !/^\d+$/.test(d) ? '✗ Numbers only' : d[0] !== '0' ? '✗ Must start with 0' : '✗ ' + d.length + ' of 11 digits';
+    inp.classList.toggle('invalid', !ok);
   }
   // Primary Code must be an ACTIVE Loading touchpoint of the SAME partner
   function primaryOk() {
@@ -507,6 +537,7 @@
       if (!draft.dthClass) return 'Please choose the DTH Acquisition Class';
       if (!draft.owner.trim()) return 'Please enter the Owner Name / CS Email';
       if (!draft.contact.trim()) return 'Please enter the Contact Number';
+      if (!mobileOk(draft.contact)) return 'Contact Number must be 11 digits starting with 0 (e.g. 09171234567)';
     }
     if (t.loading) { if (!draft.loadingClass) return 'Please choose the Loading Classification'; if (!primaryOk()) return 'Primary Code is not an active Loading touchpoint of ' + draft.partner; }
     if (t.ott && !draft.ottClass) return 'Please choose the OTT Classification';
@@ -547,8 +578,7 @@
         ${row('Barangay', draft.brgy)}${row('Street', draft.street)}
         ${draft.resubmit ? row('GPS', 'Kept from the original request') : row('GPS', draft.lat.toFixed(6) + ', ' + draft.lng.toFixed(6) + ' (±' + draft.acc + ' m)')}
         ${draft.resubmit ? '' : row('Location check', draft.offline ? 'Will be checked when sent'
-          : draft.locate.status === 'OK' && draft.gridMuni !== draft.locate.match.muni ? 'Province verified by GPS; municipality changed by you'
-          : ({ OK: 'Verified by GPS', CONFIRM_MUNI: 'Municipality confirmed by you', UNVERIFIED: 'Not verified' })[draft.locate.status])}
+          : draft.locate.status === 'OK' ? 'Province verified by GPS' : 'Not verified — head office will check')}
         ${draft.resubmit ? '' : sec('Agreement') + row('Terms and Conditions', 'Accepted') + row('Consent', 'Accepted')}
       </table>
       <div class="row-btns"><button class="btn ghost" id="backBtn" data-to="${draft.resubmit ? 'details' : 'agree'}">‹ Back</button>
@@ -596,12 +626,15 @@
   let myReqs = null;
   async function loadMyRequests() {
     const box = $('#myReq'); if (!box) return;
-    myReqs = myReqs || ls.get(myReqsKey(), null);
+    if (!myReqs) {   // saved copy from the last time (shown right away, also offline)
+      const c = ls.get(myReqsKey(), null);
+      if (c && Array.isArray(c.list) && c.month === monthKey(new Date())) { myReqs = c.list; myReqs.month = c.month; }
+    }
     if (myReqs) drawMyRequests();
     if (!navigator.onLine) { if (!myReqs) box.innerHTML = '<p class="hint">Connect to the internet to see the status of your requests.</p>'; return; }
     try {
-      const r = await api('myRequests', { token: session.token }, 30000);
-      myReqs = r.requests; ls.set(myReqsKey(), myReqs);
+      const r = await api('myRequests', { token: session.token, scope: 'current' }, 30000);
+      myReqs = r.requests; myReqs.month = r.month; ls.set(myReqsKey(), { list: myReqs, month: r.month });
       drawMyRequests();
     } catch (e) { if (!myReqs && $('#myReq')) $('#myReq').innerHTML = '<p class="hint">Could not load your requests.</p>'; }
   }
@@ -615,15 +648,70 @@
   const ageDays = iso => Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 864e5));
   const actionShort = a => String(a || '').replace('AMEND - ', 'Amend: ').replace('REGISTER NEW', 'New').toLowerCase().replace(/^\w/, c => c.toUpperCase());
 
+  const monthKey = d => { const x = new Date(d); return x.getFullYear() + '-' + String(x.getMonth() + 1).padStart(2, '0'); };
+  const monthName = ym => { const [y, m] = String(ym).split('-').map(Number); return y ? new Date(y, m - 1, 1).toLocaleDateString([], { month: 'long', year: 'numeric' }) : ''; };
+
   function drawMyRequests() {
     const box = $('#myReq'); if (!box) return;
     const cancelled = myReqs.filter(r => r.status === 'CANCELLED');
-    box.innerHTML = `<div class="tiles">${GROUPS.map(g => {
+    box.innerHTML = `<p class="month-note">${esc(monthName(myReqs.month || monthKey(new Date())))} · plus anything still in process from earlier months</p>
+      <div class="tiles">${GROUPS.map(g => {
         const n = myReqs.filter(r => inGroup(g, r)).length;
         return `<button class="tile ${g.cls}" data-g="${g.k}" ${n ? '' : 'disabled'}><b>${n}</b><span>${g.label}</span></button>`; }).join('')}</div>
       ${cancelled.length ? `<button class="linkish" data-g="cancelled">Cancelled (${cancelled.length})</button>` : ''}
-      ${!myReqs.length ? '<p class="hint">No requests yet.</p>' : ''}`;
+      ${!myReqs.length ? '<p class="hint">No requests this month yet.</p>' : ''}
+      <button class="archive-link" id="archiveBtn">🗂 Request archive — previous months</button>`;
     box.querySelectorAll('[data-g]').forEach(b => b.onclick = () => openGroup(b.dataset.g));
+    $('#archiveBtn').onclick = openArchive;
+  }
+
+  /* Archive: finished requests (approved / declined / cancelled) from previous months */
+  function sheet(title, inner) {
+    const m = document.createElement('div');
+    m.className = 'modal';
+    m.innerHTML = `<div class="sheet"><div class="sheet-hd"><h2>${title}</h2><button class="x" aria-label="Close">✕</button></div>${inner}</div>`;
+    document.body.appendChild(m);
+    document.body.style.overflow = 'hidden';
+    const close = () => { m.remove(); document.body.style.overflow = ''; };
+    m.querySelector('.x').onclick = close;
+    m.onclick = e => { if (e.target === m) close(); };
+    return { m, close };
+  }
+  async function openArchive() {
+    if (!navigator.onLine) { toast('Connect to the internet to open the archive.'); return; }
+    const { m } = sheet('Request archive', `<div id="arcBody"><p class="hint"><span class="spinner"></span>Loading your previous requests…</p></div>`);
+    let list;
+    try { list = (await api('myRequests', { token: session.token, scope: 'archive' }, 60000)).requests; }
+    catch (e) { const b = m.querySelector('#arcBody'); if (b) b.innerHTML = `<div class="notice bad">${esc(isNetErr(e) ? 'Could not reach the server.' : e.message)}</div>`; return; }
+    const body = m.querySelector('#arcBody'); if (!body) return;
+    if (!list.length) { body.innerHTML = '<p class="hint">No finished requests from previous months.</p>'; return; }
+    const months = [...new Set(list.map(r => r.month).filter(Boolean))].sort().reverse();
+    const ST = { APPROVED: 'Approved', REJECTED: 'Declined', CANCELLED: 'Cancelled' };
+    body.innerHTML = `<div class="filters">
+        <select id="fMonth"><option value="">All months</option>${months.map(x => `<option value="${x}">${esc(monthName(x))}</option>`).join('')}</select>
+        <select id="fStatus"><option value="">All statuses</option><option value="APPROVED">Approved</option><option value="REJECTED">Declined</option><option value="CANCELLED">Cancelled</option></select></div>
+      <p class="hint" id="fCount" style="margin:0 0 8px"></p>
+      <div class="tbl"><table class="grid"><thead><tr><th>Request</th><th>Result</th><th>Requested</th></tr></thead><tbody id="arcRows"></tbody></table></div>`;
+    const draw = () => {
+      const fm = $('#fMonth').value, fs = $('#fStatus').value;
+      const rows = list.filter(r => (!fm || r.month === fm) && (!fs || r.status === fs));   // already newest first
+      $('#fCount').textContent = rows.length + ' request' + (rows.length === 1 ? '' : 's') + ' · newest first · tap a row for its history';
+      $('#arcRows').innerHTML = rows.map((r, i) => {
+        const x = r.status === 'REJECTED' ? r.rejected : r.status === 'CANCELLED' ? r.cancelled : null;
+        const result = `<span class="pill st-${esc(r.status)}">${esc(ST[r.status] || r.status)}</span>` +
+          (r.status === 'APPROVED' ? (r.salescode ? `<div class="code" style="margin-top:4px">${esc(r.salescode)}</div>` : '') + `<small>${shortDate(r.approvedAt)}</small>`
+            : x ? `<small>${esc(x.who || '')} · ${shortDate(x.at)}</small>${x.remarks ? `<div class="reason">“${esc(x.remarks)}”</div>` : ''}` : '');
+        return `<tr data-i="${i}"><td><b>${esc(r.trade || r.salescode)}</b><small>${esc(r.id)} · ${esc(actionShort(r.action))}<br>${esc(r.partner)}</small></td>
+          <td>${result}</td><td>${shortDate(r.at)}</td></tr>
+          <tr class="more" id="amore${i}" hidden><td colspan="3">
+            ${r.changes ? `<p class="hint" style="white-space:pre-line;margin-top:0">${esc(r.changes)}</p>` : ''}
+            <ul class="hist">${(r.history || []).map(h => `<li>${new Date(h.at).toLocaleString()} — ${esc(h.who)}: <b>${esc(h.what)}</b>${h.remarks ? ' — “' + esc(h.remarks) + '”' : ''}</li>`).join('')}</ul></td></tr>`;
+      }).join('') || '<tr><td colspan="3" class="hint">Nothing matches these filters.</td></tr>';
+      m.querySelectorAll('#arcRows tr[data-i]').forEach(tr => tr.onclick = () => {
+        const more = m.querySelector('#amore' + tr.dataset.i); more.hidden = !more.hidden; tr.classList.toggle('open', !more.hidden); });
+    };
+    $('#fMonth').onchange = draw; $('#fStatus').onchange = draw;
+    draw();
   }
 
   /* Pop-up table for one group */
@@ -837,7 +925,7 @@
     const ph = f.type === 'primary' ? 'Leave blank if none' : '';
     const t = f.type === 'tel' ? 'tel' : 'text';
     return `<label for="${id}">${esc(f.label)}${req}</label><input type="${t}" id="${id}" value="${esc(v)}" placeholder="${ph}" ${f.type === 'primary' || f.type === 'code' ? 'autocapitalize="characters" spellcheck="false"' : ''}>
-      ${f.type === 'primary' ? `<div class="hint" id="${id}hint"></div>` : ''}`;
+      ${f.type === 'primary' || f.type === 'tel' ? `<div class="hint" id="${id}hint">${f.type === 'tel' ? '11-digit mobile number starting with 0' : ''}</div>` : ''}`;
   }
   function bindField(f, i) {
     const el = $('#af' + i);
@@ -850,8 +938,10 @@
         (am.rec.fields || []).forEach((g, j) => { if (g.type === 'brgy') { am.values[g.h] = ''; drawAmendBrgy(g, j); } });
       } else am.values[f.h] = el.value;
       if (f.type === 'primary') primaryHint(f, i);
+      if (f.type === 'tel') mobileHint(el, $('#af' + i + 'hint'));
     };
     if (f.type === 'primary') primaryHint(f, i);
+    if (f.type === 'tel' && el.value && (am.purpose !== 'CHANGE' || key(el.value) !== key(f.value))) mobileHint(el, $('#af' + i + 'hint'));
   }
   function primaryHint(f, i) {
     const h = $('#af' + i + 'hint'), c = normCode(am.values[f.h]); if (!h) return;
@@ -887,6 +977,9 @@
       if (f.req && (f.type === 'area' ? !(v && v.muni) : !String(v || '').trim())) return 'Please fill in: ' + f.label;
       if (f.type === 'primary' && normCode(v) && ((boot.loadingCodesByPartner || {})[rec.partner] || []).indexOf(normCode(v)) < 0)
         return 'Primary Code is not an active Loading touchpoint of ' + rec.partner;
+      // mobile number: checked when entered or changed (an old number left unchanged is not blocked)
+      if (f.type === 'tel' && String(v || '').trim() && (am.purpose !== 'CHANGE' || key(v) !== key(f.value)) && !mobileOk(v))
+        return f.label + ' must be 11 digits starting with 0 (e.g. 09171234567)';
     }
     if ((am.purpose === 'CHANGE' || am.purpose === 'UPGRADE') && !am.justification.trim()) return 'Please write the justification';
     if (am.purpose === 'CHANGE' && !amendChanges().length) return 'Nothing was changed yet';
@@ -944,9 +1037,15 @@
     if (!navigator.onLine) { if (manual) toast('No signal — will send automatically later.'); return; }
     syncing = true;
     let sent = 0;
+    const bar = $('#sendBar');
     try {
-      const items = (await DB.all('queue')).sort((a, b) => a.savedAt - b.savedAt);
-      for (const it of items) {
+      // requests the server already refused are only retried when the rep taps Send
+      const items = (await DB.all('queue')).filter(it => manual || !it.error).sort((a, b) => a.savedAt - b.savedAt);
+      for (let n = 0; n < items.length; n++) {
+        const it = items[n];
+        bar.hidden = false;
+        $('#sendTxt').textContent = 'Sending ' + (n + 1) + ' of ' + items.length + '… keep the app open';
+        $('#sendFill').style.width = Math.round(n / items.length * 100) + '%';
         try {
           const r = await api('submit', { token: session.token, request: it.request }, 120000);
           await DB.del('queue', it.clientId); sent++;
@@ -962,6 +1061,7 @@
     } catch (e) { toast('Could not read saved requests: ' + e.message, 5000); }
     finally {
       syncing = false;
+      bar.hidden = true;
       if (sent) toast('Sent ' + sent + ' request(s) ✓');
       if (current === 'home' || current === 'done') render();
     }

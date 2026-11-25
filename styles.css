@@ -214,3 +214,27 @@ table.grid tr.more td { background:#FAFAFA; }
 #apprBtn { border:2px solid var(--ink); }
 #apprBtn .badge { display:inline-block; min-width:26px; padding:2px 8px; margin-left:6px; border-radius:99px; background:var(--brand); color:#fff; font-size:15px; text-align:center; vertical-align:2px; }
 #apprBtn .badge[hidden] { display:none; }
+
+/* ---------- Fields to fill: easy to spot ---------- */
+label { color:var(--ink); font-size:15px; font-weight:700; }
+.req { font-size:0; }                                     /* the * becomes a REQUIRED tag */
+.req::after { content:'REQUIRED'; font-size:10px; font-weight:800; letter-spacing:.06em; color:#fff; background:var(--brand);
+              border-radius:99px; padding:2px 7px; margin-left:6px; vertical-align:2px; }
+label.lab-opt::after { content:'optional'; font-size:11px; font-weight:600; color:var(--muted); background:#EDEDED; border-radius:99px; padding:2px 7px; margin-left:6px; vertical-align:1px; }
+input.need, select.need, textarea.need { background:#FFF8E6; border:2px solid var(--yellow); }
+input.need.filled, select.need.filled, textarea.need.filled { background:#fff; border:1px solid #CFCFCF;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20'%3E%3Cpath d='M4 10.5l4 4 8-9' fill='none' stroke='%232B2B2B' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat:no-repeat; background-position:right 14px center; padding-right:42px; }
+select.need.filled { background-position:right 36px center; }
+input.need.missing, select.need.missing, textarea.need.missing, input.invalid { border:2px solid var(--brand); background:var(--badbg); }
+.missing-msg { color:var(--bad); font-size:13px; font-weight:700; margin-top:5px; }
+.missing-msg::before { content:'⚠ '; }
+.need-count { display:inline-block; margin:-2px 0 12px; padding:6px 12px; border-radius:99px; font-size:13px; font-weight:800;
+              background:#FFF8E6; color:#6B4500; border:1px solid var(--yellow); }
+.need-count.done { background:#EDEDED; color:var(--ink); border-color:#D0D0D0; }
+/* information filled in by the app — not a field */
+.autobox { position:relative; background:#F4F4F4; border:1px dashed #C9C9C9; border-radius:10px; padding:10px 12px; margin:14px 0 4px; }
+.autobox small { display:block; font-size:12px; color:var(--muted); font-weight:700; margin-bottom:2px; padding-right:48px; }
+.autobox b { display:block; font-size:15px; color:var(--ink); }
+.autobox .sub { display:block; font-size:12px; color:var(--muted); margin-top:3px; }
+.autotag { position:absolute; top:9px; right:10px; font-size:10px; font-weight:800; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); background:#E3E3E3; border-radius:99px; padding:2px 7px; }

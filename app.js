@@ -232,6 +232,55 @@
       <button class="btn" id="nextBtn" ${nextDisabled ? 'disabled' : ''}>${nextLabel}</button></div>`;
   function bindBack() { const b = $('#backBtn'); if (b) b.onclick = () => go(b.dataset.to); }
 
+  /* ---------- Make the fields to fill obvious ----------
+     Required fields (labels with the red tag) get a yellow box until filled, then a ✓. Optional fields get an "optional" tag.
+     A counter shows how many required fields are left; Next/Review/Send highlights the missing ones in red. */
+  const ctlFor = lab => {
+    let c = lab.htmlFor ? document.getElementById(lab.htmlFor) : null;
+    if (!c) { let n = lab.nextElementSibling; while (n && !/^(INPUT|SELECT|TEXTAREA)$/.test(n.tagName)) { if (n.tagName === 'LABEL' || n.tagName === 'H3') { n = null; break; } n = n.nextElementSibling; } c = n; }
+    return c && /^(INPUT|SELECT|TEXTAREA)$/.test(c.tagName) && !/^(checkbox|radio|file|hidden)$/.test(c.type) ? c : null;
+  };
+  const shown = el => !!(el && el.offsetParent !== null && !el.disabled);
+  const isFilled = c => !c.disabled && String(c.value || '').trim() !== '' && !c.classList.contains('invalid');
+  function markFields() {
+    const need = [];
+    const isForm = !!view.querySelector('label .req');   // only forms with required fields get tags (not login, approvals…)
+    view.querySelectorAll('label').forEach(lab => {
+      const c = ctlFor(lab); if (!c || c.readOnly) return;
+      const req = !!lab.querySelector('.req');
+      lab.classList.toggle('lab-need', req); lab.classList.toggle('lab-opt', isForm && !req && !/optional/i.test(lab.textContent));
+      c.classList.toggle('need', req);
+      if (req) { c.classList.toggle('filled', isFilled(c)); if (shown(c)) need.push(c); }
+      if (req && isFilled(c)) { c.classList.remove('missing'); const m = c.parentNode.querySelector('.missing-msg[data-for="' + c.id + '"]'); if (m) m.remove(); }
+    });
+    // counter at the top of the form
+    const card = view.querySelector('.card'); if (!card) return;
+    let cnt = card.querySelector('.need-count');
+    if (!need.length) { if (cnt) cnt.remove(); return; }
+    if (!cnt) { cnt = document.createElement('div'); cnt.className = 'need-count'; const h = card.querySelector('h2'); h ? h.after(cnt) : card.prepend(cnt); }
+    const left = need.filter(c => !isFilled(c)).length;
+    cnt.className = 'need-count' + (left ? '' : ' done');
+    cnt.textContent = left ? `${left} required field${left === 1 ? '' : 's'} left to fill` : 'All required fields filled ✓';
+  }
+  function flagMissing() {
+    const miss = [...view.querySelectorAll('.need')].filter(c => shown(c) && !isFilled(c));
+    miss.forEach(c => {
+      c.classList.add('missing');
+      if (!c.parentNode.querySelector('.missing-msg[data-for="' + c.id + '"]')) {
+        const m = document.createElement('div'); m.className = 'missing-msg'; m.dataset.for = c.id;
+        m.textContent = c.classList.contains('invalid') ? 'Please correct this' : 'Please fill this in'; c.after(m);
+      }
+    });
+    if (miss.length) { miss[0].scrollIntoView({ behavior: 'smooth', block: 'center' }); setTimeout(() => miss[0].focus({ preventScroll: true }), 350); }
+  }
+  let markT;
+  new MutationObserver(() => { clearTimeout(markT); markT = setTimeout(markFields, 30); }).observe(view, { childList: true, subtree: true });
+  view.addEventListener('input', markFields); view.addEventListener('change', markFields);
+  // Next / Review / Check / Send: show what is missing (the step's own check still runs and explains)
+  view.addEventListener('click', e => {
+    const b = e.target.closest('#nextBtn, #sendBtn, #amFind'); if (b && !b.disabled) flagMissing();
+  }, true);
+
   function render() {
     if (!session) return renderLogin();
     ({ home: renderHome, partner: renderPartner, photo: renderPhoto, location: renderLocation, type: renderType,
@@ -387,7 +436,7 @@
         const v = a.muni + '|' + a.prov; return `<option value="${esc(v)}" ${v === draft.gridMuni + '|' + draft.gridProv ? 'selected' : ''}>${esc(a.muni)}</option>`; }).join('')}</optgroup>`).join('')}
       </select>
       <div class="hint">Only ${esc(draft.partner)}'s municipalities${st === 'OK' ? ' in ' + esc(provName) : ''} are listed.</div>
-      <label>Province</label><div id="provOut" class="hint" style="font-size:16px;color:var(--ink);font-weight:700;margin-top:0">${esc(draft.gridProv || '—')}</div>
+      <div class="autobox"><span class="autotag">auto</span><small>Province</small><b id="provOut">${esc(draft.gridProv || '—')}</b></div>
       ${ncr ? '<div class="hint">Metro Manila: the province follows the municipality you choose.</div>' : ''}` : '';
     let box = '';
     const gpsTown = det.city || det.gridMuni;
@@ -402,9 +451,8 @@
       ${st === 'OUT_OF_COVERAGE' ? `<button class="btn ghost" id="retakeBtn">📷 Retake photo at the right spot</button>
         <button class="btn ghost" id="changePartnerBtn">Change partner</button>` : `
       ${sel}
-      <h3>Captured location</h3>
-      ${draft.full ? `<div class="hint" style="font-size:14px;color:var(--ink)">${esc(draft.full)}</div>` : ''}
-      <div class="hint">📍 ${draft.lat.toFixed(6)}, ${draft.lng.toFixed(6)} (±${draft.acc} m)</div>
+      <div class="autobox"><span class="autotag">auto</span><small>Captured location (from the photo's GPS)</small>
+        ${draft.full ? `<b>${esc(draft.full)}</b>` : ''}<span class="sub">📍 ${draft.lat.toFixed(6)}, ${draft.lng.toFixed(6)} (±${draft.acc} m)</span></div>
       <div id="brgyBox"></div>
       <label for="street">Street / House no.</label>
       <input type="text" id="street" value="${esc(draft.street)}" placeholder="e.g. 12 Rizal St.">
@@ -448,7 +496,7 @@
     const box = $('#brgyBox'); if (!box) return;
     const list = brgyList();
     const label = `<label for="brgy">Barangay <span class="req">*</span></label>`;
-    if (!draft.gridMuni) { box.innerHTML = label + `<select id="brgy" disabled><option>Choose the municipality first</option></select>`; return; }
+    if (!draft.gridMuni) { box.innerHTML = label + `<select id="brgy" disabled><option value="">Choose the municipality first</option></select>`; return; }
     if (!list) {   // town has no official list (rare): type it
       box.innerHTML = label + `<input type="text" id="brgy" value="${esc(draft.brgy || draft.brgyDetected)}" placeholder="Type the barangay">`;
       if (!draft.brgy && draft.brgyDetected) { draft.brgy = draft.brgyDetected; saveDraft(); }

@@ -94,7 +94,7 @@
   function start() {
     $('#tabs').hidden = false; $('#logoutBtn').hidden = false;
     $('#who').textContent = (session.user.email || session.user.name) + ' · ' + session.user.role;
-    $('#toolsTab').hidden = session.user.role !== 'ADMIN';   // Admin tools: ADMIN account only
+    $('#toolsTab').hidden = !['ADMIN', 'DEPT'].includes(session.user.role);   // Admin tools: ADMIN (all) and DEPT (purge + redirect)
     document.querySelector('#tabs [data-tab=approvals]').hidden = session.user.role === 'ADMIN';   // ADMIN monitors, never decides
     if (session.user.role === 'ADMIN' && tab === 'approvals') tab = 'dashboard';
     show(); if (session.user.role !== 'ADMIN') countApprovals();
@@ -419,10 +419,12 @@
 
   /* ======================= ADMIN TOOLS (ADMIN only) ======================= */
   let toolsSection = 'purge';
-  const TOOL_TABS = [['purge', 'Bulk purge'], ['redirect', 'Redirect a request'], ['tables', 'Edit tables'], ['status', 'System status']];
+  const TOOL_TABS = [['purge', 'Bulk purge', true], ['redirect', 'Redirect a request', true], ['tables', 'Edit tables'], ['status', 'System status']];   // true = DEPT may use
   function renderTools() {
+    const mine = TOOL_TABS.filter(t => session.user.role === 'ADMIN' || t[2]);   // DEPT: only the tools marked for DEPT
+    if (!mine.some(t => t[0] === toolsSection)) toolsSection = mine[0][0];
     view.innerHTML = `<div class="head"><h2>Admin tools</h2></div>
-      <div class="seg">${TOOL_TABS.map(([k, l]) => `<button data-tool="${k}" class="${toolsSection === k ? 'on' : ''}">${l}</button>`).join('')}</div>
+      <div class="seg">${mine.map(([k, l]) => `<button data-tool="${k}" class="${toolsSection === k ? 'on' : ''}">${l}</button>`).join('')}</div>
       <div id="toolBody"></div>`;
     view.querySelectorAll('[data-tool]').forEach(b => b.onclick = () => { toolsSection = b.dataset.tool; renderTools(); });
     ({ purge: toolPurge, redirect: toolRedirect, tables: toolTables, status: toolStatus })[toolsSection]();

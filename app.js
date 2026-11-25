@@ -673,6 +673,7 @@
     box.querySelectorAll('[data-g]').forEach(b => b.onclick = () => openGroup(b.dataset.g, b.dataset.kind));
     box.querySelectorAll('[data-arc]').forEach(b => b.onclick = () => openArchive(b.dataset.arc));
   }
+  const transferTag = r => r.transferredFrom ? `<span class="pill xfer">↪ Transferred from ${esc(r.transferredFrom)}</span>` : '';
   const reqKind = r => /^AMEND/i.test(r.action || '') ? 'AMEND' : 'NEW';
   const KIND_LABEL = { NEW: '➕ New touchpoint requests', AMEND: '✏️ Amendment requests' };
 
@@ -712,7 +713,7 @@
         const result = `<span class="pill st-${esc(r.status)}">${esc(ST[r.status] || r.status)}</span>` +
           (r.status === 'APPROVED' ? (r.salescode ? `<div class="code" style="margin-top:4px">${esc(r.salescode)}</div>` : '') + `<small>${shortDate(r.approvedAt)}</small>`
             : x ? `<small>${esc(x.who || '')} · ${shortDate(x.at)}</small>${x.remarks ? `<div class="reason">“${esc(x.remarks)}”</div>` : ''}` : '');
-        return `<tr data-i="${i}"><td><b>${esc(r.trade || r.salescode)}</b><small>${esc(r.id)} · ${esc(actionShort(r.action))}<br>${esc(r.partner)}</small></td>
+        return `<tr data-i="${i}"><td><b>${esc(r.trade || r.salescode)}</b><small>${esc(r.id)} · ${esc(actionShort(r.action))}<br>${esc(r.partner)}</small>${transferTag(r)}</td>
           <td>${result}</td><td>${shortDate(r.at)}</td></tr>
           <tr class="more" id="amore${i}" hidden><td colspan="3">
             ${r.changes ? `<p class="hint" style="white-space:pre-line;margin-top:0">${esc(r.changes)}</p>` : ''}
@@ -732,7 +733,7 @@
     const head = { process: ['Request', 'Ageing', 'Current approver'], returned: ['Request', 'Returned by / reason', 'Action'],
                    approved: ['Request', 'Sales Code', 'Approved on'], declined: ['Request', 'Declined by / reason', 'Date'],
                    cancelled: ['Request', 'Cancelled on', ''] }[k];
-    const reqCell = r => `<b>${esc(r.trade || r.salescode)}</b><small>${esc(r.id)} · ${esc(actionShort(r.action))}<br>${esc(r.partner)} · sent ${shortDate(r.at)}</small>`;
+    const reqCell = r => `<b>${esc(r.trade || r.salescode)}</b><small>${esc(r.id)} · ${esc(actionShort(r.action))}<br>${esc(r.partner)} · sent ${shortDate(r.at)}</small>${transferTag(r)}`;
     const rows = list.map((r, i) => {
       let c2 = '', c3 = '';
       if (k === 'process') {

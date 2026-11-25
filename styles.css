@@ -177,3 +177,6 @@ table.grid tr.more td { background:#FAFAFA; }
 
 /* proof attachments */
 .list-item .pdf { width:46px; height:46px; border-radius:8px; flex:none; background:var(--brand); color:#fff; font:800 13px/46px system-ui, sans-serif; text-align:center; }
+
+/* request moved here from the previous TSM of the partner */
+.pill.xfer { display:inline-block; margin-top:4px; background:#FFF3DD; color:#6B4500; border:1px solid var(--yellow); white-space:normal; }

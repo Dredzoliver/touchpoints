@@ -95,9 +95,11 @@
     $('#tabs').hidden = false; $('#logoutBtn').hidden = false;
     $('#who').textContent = (session.user.email || session.user.name) + ' · ' + session.user.role;
     $('#toolsTab').hidden = session.user.role !== 'ADMIN';   // Admin tools: ADMIN account only
-    show(); countApprovals();
+    document.querySelector('#tabs [data-tab=approvals]').hidden = session.user.role === 'ADMIN';   // ADMIN monitors, never decides
+    if (session.user.role === 'ADMIN' && tab === 'approvals') tab = 'dashboard';
+    show(); if (session.user.role !== 'ADMIN') countApprovals();
     clearInterval(timer);
-    timer = setInterval(() => { if (document.visibilityState !== 'visible') return; countApprovals(); if (tab === 'dashboard' && !$('.detail')) renderDashboard(true); else dash = null; }, 300000);   // every 5 minutes
+    timer = setInterval(() => { if (document.visibilityState !== 'visible') return; if (session.user.role !== 'ADMIN') countApprovals(); if (tab === 'dashboard' && !$('.detail')) renderDashboard(true); else dash = null; }, 300000);   // every 5 minutes
   }
 
   /* ---------- DASHBOARD ---------- */
@@ -130,6 +132,7 @@
       const ex = $('#ex-' + kind); if (ex) ex.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     });
     view.querySelectorAll('[data-open]').forEach(b => b.onclick = () => { tab = 'approvals'; document.querySelectorAll('#tabs [data-tab]').forEach(x => x.classList.toggle('on', x.dataset.tab === 'approvals')); openApproval(b.dataset.open); });
+    view.querySelectorAll('[data-view]').forEach(b => b.onclick = () => openApproval(b.dataset.view, 'dashboard'));   // monitor: read-only
   }
   function reqBlock(kind, title) {
     const R = dash.requests[kind], P = R.periods;
@@ -154,7 +157,7 @@
           <td>${esc(i.partner)}<small>${esc(i.requestor)}</small></td><td>${esc(i.with)}</td>
           <td class="${i.waitingDays >= 3 ? 'late' : ''}">${days(i.waitingDays)}</td>
           <td>${i.mine ? `<button class="decide-link" data-open="${esc(i.id)}" style="border:0;cursor:pointer">Decide</button>`
-               : i.link ? `<a class="decide-link" href="${esc(i.link)}" target="_blank" rel="noopener">Review &amp; Decide ↗</a>` : '<span class="muted">—</span>'}</td></tr>`).join('')}
+               : `<button class="refresh" data-view="${esc(i.id)}">View</button>`}</td></tr>`).join('')}
       </tbody></table></div>` : ''}
     </section>`;
   }
@@ -190,17 +193,17 @@
     view.querySelectorAll('.item[data-id]').forEach(b => b.onclick = () => openApproval(b.dataset.id));
     $('#apprRefresh').onclick = () => renderApprovals();
   }
-  async function openApproval(id) {
+  async function openApproval(id, from) {
     view.innerHTML = `<p class="hint"><span class="spinner"></span>Opening ${esc(id)}…</p>`;
     let r;
     try { r = await api('portalRequest', { token: session.portalToken, id }, 60000); }
-    catch (e) { toast(e.message, 4000); return renderApprovals(); }
+    catch (e) { toast(e.message, 4000); return from === 'dashboard' ? drawDashboard() : renderApprovals(); }
     const rows = r.rows.map(x => `<tr><td>${esc(x.label)}</td><td class="${x.red ? 'red' : ''}">${x.html ? x.value : esc(x.value).replace(/\n/g, '<br>')}</td></tr>`).join('');
     view.innerHTML = `<div class="card detail">
       <div class="bar"><button class="refresh" id="apprBack">‹ Back</button><h2 style="font-size:16px">${esc(r.id)}</h2>
         ${r.waiting ? '<button class="btn mini dark" id="toDecide">Decide ↓</button>' : ''}</div>
       <h2>${esc(r.title)}</h2>
-      <p class="hint" style="margin-top:0">${r.waiting ? (r.finalStep ? 'Final approval' : 'Approval step ' + esc(r.step)) + ' · ' + esc(r.approver) : 'Status: ' + esc(r.status) + ' (view only)'}</p>
+      <p class="hint" style="margin-top:0">${r.waiting ? (r.finalStep ? 'Final approval' : 'Approval step ' + esc(r.step)) + ' · ' + esc(r.approver) : 'View only · status ' + esc(r.status) + (r.status === 'FOR APPROVAL' && r.approver ? ' · waiting for ' + esc(r.approver) : '')}</p>
       ${r.photo ? `<img class="photo" src="${r.photo}" alt="Store photo" id="apprPhoto">` : ''}
       ${r.lat ? `<p style="margin:4px 0 10px"><a href="https://www.google.com/maps?q=${esc(r.lat)},${esc(r.lng)}" target="_blank" rel="noopener">📍 Open location in Google Maps</a></p>` : ''}
       <table class="sum">${rows}</table>
@@ -213,7 +216,7 @@
         <textarea id="apprRemarks" rows="3" placeholder="What should be corrected, or why it is rejected"></textarea>
         <div class="btns"><button class="btn approve" data-d="APPROVE">✓ Approve${r.finalStep ? ' (final)' : ''}</button>
           <button class="btn return" data-d="RETURN">↩ Return for correction</button><button class="btn reject" data-d="REJECT">✕ Reject</button></div></div>` : ''}</div>`;
-    $('#apprBack').onclick = () => renderApprovals();
+    $('#apprBack').onclick = () => from === 'dashboard' ? drawDashboard() : renderApprovals();
     const td = $('#toDecide'); if (td) td.onclick = () => $('.decide').scrollIntoView({ behavior: 'smooth' });
     view.querySelectorAll('#apprPhoto, .zoomable').forEach(img => img.onclick = () => { const z = document.createElement('div'); z.className = 'zoom'; z.innerHTML = `<img src="${img.src}" alt="">`; z.onclick = () => z.remove(); document.body.appendChild(z); });
     view.querySelectorAll('[data-pdf]').forEach(b => b.onclick = async () => {

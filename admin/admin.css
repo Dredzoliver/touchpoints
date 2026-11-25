@@ -164,3 +164,5 @@ main { padding-right:16px; }
 .fb-retNEW .n.ring { animation-delay:.35s } .fb-apprAMEND .n.ring { animation-delay:.7s } .fb-retAMEND .n.ring { animation-delay:1.05s }
 .fb.zero { opacity:.55; box-shadow:0 3px 10px rgba(0,0,0,.12); }
 @media (prefers-reduced-motion: reduce) { .fb .n.ring { animation:none; } }
+/* DEPT has the floating ↻ Refresh, so the page Refresh buttons are hidden (ADMIN keeps them) */
+body.has-fab #dashRefresh, body.has-fab #apprRefresh, body.has-fab #dbRefresh, body.has-fab #retRefresh { display:none; }

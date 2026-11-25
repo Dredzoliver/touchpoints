@@ -16,6 +16,7 @@
   let session = store.get('adminSession');   // { portalToken, user:{name, role} }
   let tab = 'dashboard', dash = null, open = { NEW: '', AMEND: '' }, timer = null;
   let apprItems = [], apprFilter = 'ALL', apprLoaded = false;
+  let retItems = [], retFilter = 'ALL', retLoaded = false;
 
   function toast(msg, ms) { const t = $('#toast'); t.textContent = msg; t.style.display = 'block'; clearTimeout(toast._t); toast._t = setTimeout(() => { t.style.display = 'none'; }, ms || 3500); }
   async function api(action, data, timeout) {
@@ -75,7 +76,7 @@
     }
   }
   function logout(silent) {
-    session = null; store.del('adminSession'); clearInterval(timer); dash = null; apprItems = []; apprLoaded = false; DBC = {}; IDB.clear(); dbState.db = '';
+    session = null; store.del('adminSession'); clearInterval(timer); $('#fab').hidden = true; retItems = []; retLoaded = false; dash = null; apprItems = []; apprLoaded = false; DBC = {}; IDB.clear(); dbState.db = '';
     try { if (window.google && google.accounts) google.accounts.id.disableAutoSelect(); } catch (e) {}
     renderLogin(silent ? '' : 'You have signed out.');
   }
@@ -83,12 +84,16 @@
 
   /* ---------- tabs ---------- */
   document.querySelectorAll('#tabs [data-tab]').forEach(b => b.onclick = () => { tab = b.dataset.tab; show(); });
+  // "With DEPT" → Approvals tab (DEPT login); "Returned to requestor" → Returned tab; "With prior level" expands the list
+  const jumps = w => (w === 'dept' && session.user.role === 'DEPT') || w === 'returned';
+  function goTab(t) { tab = t; show(); scrollTo(0, 0); }
   function show() {
     document.querySelectorAll('#tabs [data-tab]').forEach(b => b.classList.toggle('on', b.dataset.tab === tab));
     // already loaded → show instantly; fresh data comes from ↻ Refresh, the 5-minute timer, or after a decision
     if (tab === 'dashboard') { if (dash) drawDashboard(); else renderDashboard(); }
     else if (tab === 'databases') renderDatabases();
     else if (tab === 'tools') renderTools();
+    else if (tab === 'returned') { if (retLoaded) drawReturned(); else renderReturned(); }
     else { if (apprLoaded) drawApprovals(); else renderApprovals(); }
   }
   function start() {
@@ -97,9 +102,11 @@
     $('#toolsTab').hidden = !['ADMIN', 'DEPT'].includes(session.user.role);   // Admin tools: ADMIN (all) and DEPT (purge + redirect)
     document.querySelector('#tabs [data-tab=approvals]').hidden = session.user.role === 'ADMIN';   // ADMIN monitors, never decides
     if (session.user.role === 'ADMIN' && tab === 'approvals') tab = 'dashboard';
+    $('#retTab').hidden = false;   // ADMIN and DEPT follow up returned requests
+    countReturned();
     show(); if (session.user.role !== 'ADMIN') countApprovals();
     clearInterval(timer);
-    timer = setInterval(() => { if (document.visibilityState !== 'visible') return; if (session.user.role !== 'ADMIN') countApprovals(); if (tab === 'dashboard' && !$('.detail')) renderDashboard(true); else dash = null; }, 300000);   // every 5 minutes
+    timer = setInterval(() => { if (document.visibilityState !== 'visible') return; if (session.user.role !== 'ADMIN') countApprovals(); countReturned(); if (tab === 'dashboard' && !$('.detail')) renderDashboard(true); else dash = null; }, 300000);   // every 5 minutes
   }
 
   /* ---------- DASHBOARD ---------- */
@@ -128,6 +135,7 @@
     $('#dashRefresh').onclick = () => renderDashboard();
     view.querySelectorAll('[data-where]').forEach(b => b.onclick = () => {
       const [kind, w] = b.dataset.where.split(':');
+      if (jumps(w)) { if (w === 'dept') { apprFilter = kind; goTab('approvals'); } else { retFilter = kind; goTab('returned'); } return; }
       open[kind] = open[kind] === w ? '' : w; drawDashboard();
       const ex = $('#ex-' + kind); if (ex) ex.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     });
@@ -151,7 +159,7 @@
       </tbody></table></div>
       <h3 style="margin:18px 0 0">On Process now</h3>
       <div class="where">${where.map(([w, l, s]) => `<button data-where="${kind}:${w}" class="${sel === w ? 'on' : ''}" ${W[w].length ? '' : 'disabled'}>
-          <b>${fmtN(W[w].length)}</b><span>${l} ${W[w].length ? (sel === w ? '▴' : '▾') : ''}</span><small>${s}</small></button>`).join('')}</div>
+          <b>${fmtN(W[w].length)}</b><span>${l} ${W[w].length ? (jumps(w) ? '→' : sel === w ? '▴' : '▾') : ''}</span><small>${s}</small></button>`).join('')}</div>
       ${sel && W[sel].length ? `<div class="expand scroll" id="ex-${kind}"><table class="data"><thead><tr><th>Request</th><th>Partner · Requestor</th><th>Now with</th><th>Waiting</th><th></th></tr></thead><tbody>
         ${W[sel].map(i => `<tr><td><b>${esc(i.trade || i.salescode)}</b><small>${esc(i.id)} · ${esc(i.action)}</small><small>${esc(i.type)} · sent ${when(i.submitted)}</small></td>
           <td>${esc(i.partner)}<small>${esc(i.requestor)}</small></td><td>${esc(i.with)}</td>
@@ -166,7 +174,7 @@
   async function countApprovals() {
     try { apprItems = (await api('portalInbox', { token: session.portalToken }, 45000)).items; apprLoaded = true;
       if (tab === 'approvals' && $('#apprRefresh')) drawApprovals();
-      const c = $('#apprCount'); c.textContent = apprItems.length; c.hidden = !apprItems.length; } catch (e) {}
+      const c = $('#apprCount'); c.textContent = apprItems.length; c.hidden = !apprItems.length; drawFab(); } catch (e) {}
   }
   async function renderApprovals() {
     view.innerHTML = `<p class="hint"><span class="spinner"></span>Loading requests waiting for you…</p>`;
@@ -174,7 +182,7 @@
     catch (e) { view.innerHTML = `<div class="notice bad">${esc(e.message)}</div>`; return; }
     if (tab !== 'approvals') return;
     const c = $('#apprCount'); c.textContent = apprItems.length; c.hidden = !apprItems.length;
-    drawApprovals();
+    drawApprovals(); drawFab();
   }
   function drawApprovals() {
     const n = k => apprItems.filter(i => k === 'ALL' || i.kind === k).length;
@@ -197,7 +205,7 @@
     view.innerHTML = `<p class="hint"><span class="spinner"></span>Opening ${esc(id)}…</p>`;
     let r;
     try { r = await api('portalRequest', { token: session.portalToken, id }, 60000); }
-    catch (e) { toast(e.message, 4000); return from === 'dashboard' ? drawDashboard() : renderApprovals(); }
+    catch (e) { toast(e.message, 4000); return from === 'dashboard' ? drawDashboard() : from === 'returned' ? drawReturned() : renderApprovals(); }
     const rows = r.rows.map(x => `<tr><td>${esc(x.label)}</td><td class="${x.red ? 'red' : ''}">${x.html ? x.value : esc(x.value).replace(/\n/g, '<br>')}</td></tr>`).join('');
     view.innerHTML = `<div class="card detail">
       <div class="bar"><button class="refresh" id="apprBack">‹ Back</button><h2 style="font-size:16px">${esc(r.id)}</h2>
@@ -216,7 +224,7 @@
         <textarea id="apprRemarks" rows="3" placeholder="What should be corrected, or why it is rejected"></textarea>
         <div class="btns"><button class="btn approve" data-d="APPROVE">✓ Approve${r.finalStep ? ' (final)' : ''}</button>
           <button class="btn return" data-d="RETURN">↩ Return for correction</button><button class="btn reject" data-d="REJECT">✕ Reject</button></div></div>` : ''}</div>`;
-    $('#apprBack').onclick = () => from === 'dashboard' ? drawDashboard() : renderApprovals();
+    $('#apprBack').onclick = () => from === 'dashboard' ? drawDashboard() : from === 'returned' ? drawReturned() : renderApprovals();
     const td = $('#toDecide'); if (td) td.onclick = () => $('.decide').scrollIntoView({ behavior: 'smooth' });
     view.querySelectorAll('#apprPhoto, .zoomable').forEach(img => img.onclick = () => { const z = document.createElement('div'); z.className = 'zoom'; z.innerHTML = `<img src="${img.src}" alt="">`; z.onclick = () => z.remove(); document.body.appendChild(z); });
     view.querySelectorAll('[data-pdf]').forEach(b => b.onclick = async () => {
@@ -241,7 +249,7 @@
       const res = await api('portalDecide', { token: session.portalToken, id: r.id, s: r.s, v: r.v, decision: d, remarks }, 90000);
       view.innerHTML = `<div class="card center" style="max-width:520px;margin:30px auto"><div class="done-mark">${d === 'APPROVE' ? '✅' : d === 'RETURN' ? '↩️' : '⛔'}</div>
         <h2>${esc(r.id)}</h2><p>${esc(res.message)}</p><button class="btn" id="apprNext">Back to Approvals</button></div>`;
-      $('#apprNext').onclick = () => renderApprovals(); countApprovals();
+      $('#apprNext').onclick = () => renderApprovals(); countApprovals(); countReturned();
       dash = null;   // counts changed — the dashboard reloads next time it is opened
     } catch (e) {
       toast(e.message, 5000);
@@ -638,6 +646,68 @@
     $('#stReload').onclick = () => toolStatus();
     const r = $('#stRetry'); if (r) r.onclick = async () => { r.disabled = true; r.innerHTML = '<span class="spinner"></span>Sending…';
       try { toolStatus(await api('adminRetryEmails', { token: session.portalToken }, 300000)); toast('Done.'); } catch (e) { toast(e.message, 5000); r.disabled = false; r.innerHTML = 'Send held emails now'; } };
+  }
+
+  /* ---------- RETURNED (sent back to the requestor) — for follow-up ---------- */
+  async function countReturned() {
+    try { retItems = (await api('adminReturned', { token: session.portalToken }, 45000)).items; retLoaded = true;
+      const c = $('#retCount'); c.textContent = retItems.length; c.hidden = !retItems.length;
+      if (tab === 'returned' && $('#retList')) drawReturned();
+      drawFab(); } catch (e) {}
+  }
+  async function renderReturned() {
+    view.innerHTML = `<p class="hint"><span class="spinner"></span>Loading returned requests…</p>`;
+    await countReturned();
+    if (tab === 'returned') drawReturned();
+  }
+  function drawReturned() {
+    const n = k => retItems.filter(i => k === 'ALL' || i.kind === k).length;
+    const list = retItems.filter(i => retFilter === 'ALL' || i.kind === retFilter);
+    view.innerHTML = `<div class="bar"><h2>Returned to requestor</h2><button class="refresh" id="retRefresh">↻ Refresh</button></div>
+      <p class="hint" style="margin:-6px 0 12px">Requests sent back for correction and not yet resent. Longest waiting first — follow up with the TSM.</p>
+      <div class="chips">${[['ALL', 'All'], ['NEW', 'New touchpoints'], ['AMEND', 'Amendments']].map(([k, l]) =>
+        `<button class="chip ${retFilter === k ? 'on' : ''}" data-rf="${k}">${l}<b class="${n(k) ? '' : 'zero'}">${n(k)}</b></button>`).join('')}</div>
+      <div id="retList">${list.length ? `<div class="expand scroll"><table class="data"><thead><tr><th>Request</th><th>Requestor</th><th>Returned by</th><th>What to correct</th><th>Waiting</th><th></th></tr></thead><tbody>
+        ${list.map(i => `<tr><td><b>${esc(i.trade || i.salescode)}</b><small>${esc(i.id)} · ${esc(i.action)}</small><small>${esc(i.partner)}</small></td>
+          <td>${esc(i.requestor)}${i.requestorEmail ? `<small><a href="mailto:${esc(i.requestorEmail)}?subject=${encodeURIComponent('Follow-up: ' + i.id + ' returned for correction')}">${esc(i.requestorEmail)}</a></small>` : ''}</td>
+          <td>${esc(i.returnedBy)}<small>${i.returnedAt ? new Date(i.returnedAt).toLocaleString() : ''}</small></td>
+          <td style="max-width:320px;white-space:normal">${esc(i.reason)}</td>
+          <td class="${i.days >= 3 ? 'late' : ''}">${days(i.days)}</td>
+          <td><button class="refresh" data-rview="${esc(i.id)}">View</button></td></tr>`).join('')}</tbody></table></div>`
+        : `<div class="empty"><div class="big">✓</div><b>No returned requests waiting.</b></div>`}</div>`;
+    view.querySelectorAll('[data-rf]').forEach(b => b.onclick = () => { retFilter = b.dataset.rf; drawReturned(); });
+    view.querySelectorAll('[data-rview]').forEach(b => b.onclick = () => openApproval(b.dataset.rview, 'returned'));
+    $('#retRefresh').onclick = () => renderReturned();
+  }
+
+  /* ---------- Floating buttons (Channel Dev / DEPT only) ---------- */
+  function drawFab() {
+    const f = $('#fab');
+    const on = !!session && session.user.role === 'DEPT';
+    document.body.classList.toggle('has-fab', on);
+    if (!on) { f.hidden = true; return; }
+    const cnt = (arr, k) => arr.filter(i => i.kind === k).length;
+    const btns = [
+      ['refresh', '↻', 'Refresh', null, 'Refresh counts and this page'],
+      ['apprNEW', 'New', 'New requests for approval', cnt(apprItems, 'NEW'), 'New touchpoint requests waiting for CHANNEL DEV DIST'],
+      ['retNEW', 'New ↩', 'New requests returned', cnt(retItems, 'NEW'), 'New touchpoint requests returned to the requestor'],
+      ['apprAMEND', 'Amend', 'Amendments for approval', cnt(apprItems, 'AMEND'), 'Amendments waiting for CHANNEL DEV DIST'],
+      ['retAMEND', 'Amend ↩', 'Amendments returned to sender', cnt(retItems, 'AMEND'), 'Amendments returned to the requestor']];
+    f.innerHTML = btns.map(([k, short, long, n, tip]) => `<button class="fb fb-${k} ${n === 0 ? 'zero' : ''}" data-fab="${k}" title="${esc(tip)}">
+        ${n == null ? `<span class="ic">${short}</span>` : `<b class="n ${n ? 'ring' : ''}">${fmtN(n)}</b>`}<span class="lb">${n == null ? long : long}</span></button>`).join('');
+    f.hidden = false;
+    f.querySelectorAll('[data-fab]').forEach(b => b.onclick = async () => {
+      const k = b.dataset.fab;
+      if (k === 'refresh') {
+        b.disabled = true; b.querySelector('.ic').innerHTML = '<span class="spinner"></span>';
+        await Promise.all([countApprovals(), countReturned()]);
+        if (tab === 'dashboard') renderDashboard(true); else if (tab === 'databases') renderDatabases(true);
+        else if (tab === 'approvals' && !$('.detail')) drawApprovals(); else if (tab === 'returned' && !$('.detail')) drawReturned();
+        toast('Updated ✓', 1500); return;
+      }
+      if (k.startsWith('appr')) { apprFilter = k.slice(4); goTab('approvals'); }
+      else { retFilter = k.slice(3); goTab('returned'); }
+    });
   }
 
   if (!CFG.API_URL) view.innerHTML = '<div class="notice bad">API_URL is not set in config.js.</div>';

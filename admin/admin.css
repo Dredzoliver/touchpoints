@@ -132,3 +132,35 @@ table.grid-edit button.x { border:0; background:none; font-size:16px; cursor:poi
 table.grid-edit button.x:hover { color:var(--brand); }
 #pFile { min-height:0; border:1px dashed #BDBDBD; padding:14px; width:100%; max-width:520px; border-radius:10px; background:#FAFAFA; }
 .filters-row .f[hidden] { display:none; }
+
+/* header stays at the top while scrolling */
+header { position:sticky; top:0; z-index:150; }
+
+/* Floating buttons (DEPT) — Cignal red for New, Cignal yellow for Amendments, lighter for Returned, gray Refresh */
+.fab { position:fixed; right:16px; top:124px; z-index:140; display:flex; flex-direction:column; gap:10px; align-items:flex-end; }
+.fab[hidden] { display:none; }
+.fb { display:flex; align-items:center; gap:10px; border:0; border-radius:99px; padding:8px 16px 8px 8px; cursor:pointer;
+      font:700 14px system-ui, sans-serif; box-shadow:0 6px 18px rgba(0,0,0,.18); white-space:nowrap; min-height:50px; }
+.fb .n, .fb .ic { display:inline-flex; align-items:center; justify-content:center; min-width:34px; height:34px; padding:0 8px; border-radius:99px;
+      font-size:17px; font-weight:800; background:rgba(255,255,255,.95); color:var(--ink); font-variant-numeric:tabular-nums; }
+.fb:hover { transform:translateY(-1px); box-shadow:0 8px 22px rgba(0,0,0,.22); }
+.fb-refresh   { background:#6B6B6B; color:#fff; }
+.fb-apprNEW   { background:#FF0013; color:#fff; }
+.fb-retNEW    { background:#FF8A92; color:#2B2B2B; }
+.fb-apprAMEND { background:#FBB040; color:#2B2B2B; }
+.fb-retAMEND  { background:#FDDCA6; color:#2B2B2B; }
+.fb-refresh .ic { background:rgba(255,255,255,.2); color:#fff; }
+main { padding-right:16px; }
+@media (min-width: 900px) { body.has-fab main { padding-right:300px; } }
+@media (max-width: 640px) {
+  .fb { padding:6px; min-height:46px; } .fb .lb { display:none; }   /* phone: numbers only */
+  .fab { right:10px; top:150px; gap:8px; }
+}
+
+/* bell-ring on counts that need attention (every ~3 s); zero counts stay still and faded */
+@keyframes bell { 0%,62%,100% { transform:rotate(0) } 66% { transform:rotate(-18deg) } 70% { transform:rotate(16deg) }
+                  74% { transform:rotate(-12deg) } 78% { transform:rotate(9deg) } 82% { transform:rotate(-5deg) } 86% { transform:rotate(2deg) } }
+.fb .n.ring { animation:bell 3s ease-in-out infinite; transform-origin:50% 0; box-shadow:0 0 0 3px rgba(255,255,255,.55); }
+.fb-retNEW .n.ring { animation-delay:.35s } .fb-apprAMEND .n.ring { animation-delay:.7s } .fb-retAMEND .n.ring { animation-delay:1.05s }
+.fb.zero { opacity:.55; box-shadow:0 3px 10px rgba(0,0,0,.12); }
+@media (prefers-reduced-motion: reduce) { .fb .n.ring { animation:none; } }

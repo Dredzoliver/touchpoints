@@ -23,11 +23,13 @@
     <nav id="tabs" hidden>
       <button data-tab="dashboard" class="on">Dashboard</button>
       <button data-tab="approvals">Approvals <b id="apprCount" class="cnt" hidden></b></button>
+      <button data-tab="returned" id="retTab" hidden>Returned <b id="retCount" class="cnt" hidden></b></button>
       <button data-tab="databases">Databases</button>
       <button data-tab="tools" id="toolsTab" hidden>Admin tools</button>
     </nav>
   </header>
   <main id="view"></main>
+  <div id="fab" class="fab" hidden></div>
   <div id="toast"></div>
   <script src="../config.js"></script>
   <script src="admin.js"></script>

@@ -38,12 +38,11 @@ table.data tr.total td { font-weight:800; border-top:2px solid var(--ink); }
 
 /* On Process breakdown */
 .where { display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:10px; margin-top:14px; }
-.where button { text-align:left; background:#fff; border:1px solid var(--line); border-radius:12px; padding:14px 16px; cursor:pointer; font:inherit; color:var(--ink); }
-.where button b { display:block; font-size:28px; line-height:1.1; font-variant-numeric:tabular-nums; }
-.where button span { font-size:14px; font-weight:700; }
-.where button small { display:block; color:var(--muted); font-size:12px; margin-top:2px; }
-.where button.on { border:2px solid var(--ink); background:#FAFAFA; }
-.where button:disabled { opacity:.55; cursor:default; }
+.where .tile { text-align:left; background:#fff; border:1px solid var(--line); border-radius:12px; padding:14px 16px; color:var(--ink); }
+.where .tile b { display:block; font-size:28px; line-height:1.1; font-variant-numeric:tabular-nums; }
+.where .tile span { font-size:14px; font-weight:700; }
+.where .tile small { display:block; color:var(--muted); font-size:12px; margin-top:2px; }
+.where .tile.zero { opacity:.55; }
 .expand { margin-top:12px; border:1px solid var(--line); border-radius:12px; overflow:hidden; }
 .expand table td, .expand table th { text-align:left; }
 .expand td small { display:block; color:var(--muted); font-size:12px; }

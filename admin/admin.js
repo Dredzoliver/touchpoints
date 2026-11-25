@@ -84,8 +84,7 @@
 
   /* ---------- tabs ---------- */
   document.querySelectorAll('#tabs [data-tab]').forEach(b => b.onclick = () => { tab = b.dataset.tab; show(); });
-  // "With DEPT" → Approvals tab (DEPT login); "Returned to requestor" → Returned tab; "With prior level" expands the list
-  const jumps = w => (w === 'dept' && session.user.role === 'DEPT') || w === 'returned';
+  // On Process now tiles are counts only (not clickable) — Frederick, 25 Nov 2026
   function goTab(t) { tab = t; show(); scrollTo(0, 0); }
   function show() {
     document.querySelectorAll('#tabs [data-tab]').forEach(b => b.classList.toggle('on', b.dataset.tab === tab));
@@ -133,12 +132,6 @@
       ${reqBlock('NEW', '➕ New touchpoint requests')}
       ${reqBlock('AMEND', '✏️ Amendment requests')}`;
     $('#dashRefresh').onclick = () => renderDashboard();
-    view.querySelectorAll('[data-where]').forEach(b => b.onclick = () => {
-      const [kind, w] = b.dataset.where.split(':');
-      if (jumps(w)) { if (w === 'dept') { apprFilter = kind; goTab('approvals'); } else { retFilter = kind; goTab('returned'); } return; }
-      open[kind] = open[kind] === w ? '' : w; drawDashboard();
-      const ex = $('#ex-' + kind); if (ex) ex.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-    });
     view.querySelectorAll('[data-open]').forEach(b => b.onclick = () => { tab = 'approvals'; document.querySelectorAll('#tabs [data-tab]').forEach(x => x.classList.toggle('on', x.dataset.tab === 'approvals')); openApproval(b.dataset.open); });
     view.querySelectorAll('[data-view]').forEach(b => b.onclick = () => openApproval(b.dataset.view, 'dashboard'));   // monitor: read-only
   }
@@ -151,22 +144,14 @@
       ['dept', 'With DEPT', 'Waiting for final approval'],
       ['prior', 'With prior level', kind === 'AMEND' ? 'RSM / RH / CH (amendments go to DEPT only)' : 'RSM / RH / CH'],
       ['returned', 'Returned to requestor', 'Waiting for the TSM to correct and resend']];
-    const sel = open[kind];
     return `<section class="block"><h3>${title}</h3>
       <div class="scroll"><table class="data"><thead><tr><th>Status (by date requested)</th>${cols.map(c => `<th>${c[1]}</th>`).join('')}</tr></thead><tbody>
         ${rows.map(([k, l]) => `<tr><td><span class="dot ${k}"></span>${l}</td>${cols.map(c => `<td>${fmtN(P[c[0]][k])}</td>`).join('')}</tr>`).join('')}
         <tr class="total"><td>Total requested</td>${cols.map(c => `<td>${fmtN(P[c[0]].total)}</td>`).join('')}</tr>
       </tbody></table></div>
       <h3 style="margin:18px 0 0">On Process now</h3>
-      <div class="where">${where.map(([w, l, s]) => `<button data-where="${kind}:${w}" class="${sel === w ? 'on' : ''}" ${W[w].length ? '' : 'disabled'}>
-          <b>${fmtN(W[w].length)}</b><span>${l} ${W[w].length ? (jumps(w) ? '→' : sel === w ? '▴' : '▾') : ''}</span><small>${s}</small></button>`).join('')}</div>
-      ${sel && W[sel].length ? `<div class="expand scroll" id="ex-${kind}"><table class="data"><thead><tr><th>Request</th><th>Partner · Requestor</th><th>Now with</th><th>Waiting</th><th></th></tr></thead><tbody>
-        ${W[sel].map(i => `<tr><td><b>${esc(i.trade || i.salescode)}</b><small>${esc(i.id)} · ${esc(i.action)}</small><small>${esc(i.type)} · sent ${when(i.submitted)}</small></td>
-          <td>${esc(i.partner)}<small>${esc(i.requestor)}</small></td><td>${esc(i.with)}</td>
-          <td class="${i.waitingDays >= 3 ? 'late' : ''}">${days(i.waitingDays)}</td>
-          <td>${i.mine ? `<button class="decide-link" data-open="${esc(i.id)}" style="border:0;cursor:pointer">Decide</button>`
-               : `<button class="refresh" data-view="${esc(i.id)}">View</button>`}</td></tr>`).join('')}
-      </tbody></table></div>` : ''}
+      <div class="where">${where.map(([w, l, s]) => `<div class="tile ${W[w].length ? '' : 'zero'}">
+          <b>${fmtN(W[w].length)}</b><span>${l}</span><small>${s}</small></div>`).join('')}</div>
     </section>`;
   }
 

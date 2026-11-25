@@ -75,7 +75,7 @@
     }
   }
   function logout(silent) {
-    session = null; store.del('adminSession'); clearInterval(timer); dash = null; apprItems = []; apprLoaded = false; DBC = {};
+    session = null; store.del('adminSession'); clearInterval(timer); dash = null; apprItems = []; apprLoaded = false; DBC = {}; IDB.clear(); dbState.db = '';
     try { if (window.google && google.accounts) google.accounts.id.disableAutoSelect(); } catch (e) {}
     renderLogin(silent ? '' : 'You have signed out.');
   }
@@ -247,24 +247,71 @@
 
   /* ---------- DATABASES (DTH / Loading / OTT · Active & Purged · filters · Excel) ---------- */
   let DBC = {};                                        // loaded databases, kept in memory
-  const dbState = { db: 'DTH', status: 'ACTIVE', f: { region: '', partner: '', province: '', month: '', cls: '' }, q: '', page: 0 };
+  const dbState = { db: '', status: 'ACTIVE', f: { region: '', partner: '', province: '', month: '', cls: '' }, q: '', page: 0 };
   const PAGE = 100;
   const DB_TABS = [['DTH', 'DTH Acquisition'], ['LOADING', 'Loading'], ['OTT', 'OTT Acquisition']];
   const FILTERS = [['region', 'Region'], ['partner', 'Partner'], ['province', 'Province'], ['month', ''], ['cls', 'Classification']];
 
+  /* Speed: (1) only the Active OR Purged list is fetched, (2) every list is saved on this computer (IndexedDB) and shown
+     instantly next time while a fresh copy loads in the background, (3) only the database you choose is loaded. */
+  const dbKey = () => dbState.db + ':' + dbState.status;
+  const IDB = {
+    db: null,
+    open() {
+      if (this.db) return Promise.resolve(this.db);
+      return new Promise((res, rej) => { const r = indexedDB.open('touchpoints-admin', 1);
+        r.onupgradeneeded = () => r.result.createObjectStore('lists');
+        r.onsuccess = () => { this.db = r.result; res(this.db); }; r.onerror = () => rej(r.error); });
+    },
+    async run(mode, fn) { const d = await this.open(); return new Promise((res, rej) => { const tx = d.transaction('lists', mode); const q = fn(tx.objectStore('lists')); tx.oncomplete = () => res(q && q.result); tx.onerror = () => rej(tx.error); }); },
+    get(k) { return this.run('readonly', s => s.get(k)).catch(() => null); },
+    put(k, v) { return this.run('readwrite', s => s.put(v, k)).catch(() => {}); },
+    clear() { return this.run('readwrite', s => s.clear()).catch(() => {}); }
+  };
+  const loading = {};   // key → promise (so the same list is never fetched twice at once)
+  function fetchList(db, status) {
+    const k = db + ':' + status;
+    if (!loading[k]) loading[k] = api('adminDatabase', { token: session.portalToken, db, status }, 120000)
+      .then(d => { d.savedAt = Date.now(); DBC[k] = d; IDB.put(k, d); return d; })
+      .finally(() => { delete loading[k]; });
+    return loading[k];
+  }
+  function renderDbChooser() {
+    const tp = dash && dash.touchpoints;
+    view.innerHTML = `<div class="head"><h2>Databases</h2></div>
+      <p class="hint" style="margin:-6px 0 14px">Choose which database to open. Only that one is loaded.</p>
+      <div class="choose">${DB_TABS.map(([k, l]) => `<button data-pick="${k}" class="pick ${k.toLowerCase()}"><span>${l}</span>
+          ${tp && tp[k] ? `<b>${fmtN(tp[k].active)}</b><small>active · ${fmtN(tp[k].purged)} purged</small>` : '<small>Active and Purged lists</small>'}</button>`).join('')}</div>`;
+    view.querySelectorAll('[data-pick]').forEach(b => b.onclick = () => {
+      dbState.db = b.dataset.pick; dbState.status = 'ACTIVE'; dbState.f = { region: '', partner: '', province: '', month: '', cls: '' }; dbState.q = ''; dbState.page = 0;
+      renderDatabases();
+    });
+  }
   async function renderDatabases(force) {
-    const db = dbState.db;
-    if (!DBC[db] || force) {
-      view.innerHTML = dbHead() + `<p class="hint"><span class="spinner"></span>Loading ${esc(DB_TABS.find(t => t[0] === db)[1])} records…</p>`;
-      bindDbHead();
-      try { DBC[db] = await api('adminDatabase', { token: session.portalToken, db }, 120000); }
-      catch (e) { if (tab === 'databases') view.innerHTML = dbHead() + `<div class="notice bad">${esc(e.message)}</div>`; bindDbHead(); return; }
-      if (tab !== 'databases' || dbState.db !== db) return;
+    if (!dbState.db) return renderDbChooser();
+    const k = dbKey(), [db, status] = k.split(':');
+    if (!DBC[k]) { const saved = await IDB.get(k); if (saved && !DBC[k]) { DBC[k] = saved; DBC[k].stale = true; } }
+    if (tab !== 'databases' || dbKey() !== k) return;
+    if (DBC[k] && !force) {
+      drawDatabase();
+      if (DBC[k].stale || Date.now() - (DBC[k].savedAt || 0) > 600000) refreshQuietly(k);   // older than 10 min → update in background
+      return;
     }
-    drawDatabase();
+    if (DBC[k] && force) { DBC[k].stale = true; drawDatabase(); return refreshQuietly(k); }
+    view.innerHTML = dbHead() + `<p class="hint"><span class="spinner"></span>Loading ${esc(DB_TABS.find(t => t[0] === db)[1])} · ${status === 'ACTIVE' ? 'Active' : 'Purged'}… (only the first time — next time it opens instantly)</p>`;
+    bindDbHead();
+    try { await fetchList(db, status); }
+    catch (e) { if (tab === 'databases' && dbKey() === k) { view.innerHTML = dbHead() + `<div class="notice bad">${esc(e.message)}</div>`; bindDbHead(); } return; }
+    if (tab === 'databases' && dbKey() === k) drawDatabase();
+  }
+  async function refreshQuietly(k) {
+    const [db, status] = k.split(':');
+    try { await fetchList(db, status); } catch (e) { toast('Could not update the list: ' + e.message, 4000); return; }
+    if (tab === 'databases' && dbKey() === k) drawDatabase(true);
   }
   function dbHead() {
-    return `<div class="head"><h2>Databases</h2>${DBC[dbState.db] ? `<span class="asof">loaded ${esc(DBC[dbState.db].asOf)}</span>` : ''}
+    const D = DBC[dbKey()];
+    return `<div class="head"><button class="refresh" id="dbBack">‹ Databases</button><h2>${esc((DB_TABS.find(t => t[0] === dbState.db) || [, ''])[1])}</h2>${D ? `<span class="asof">${D.stale || loading[dbKey()] ? '<span class="spinner"></span>updating… · saved copy from ' + esc(new Date(D.savedAt).toLocaleString()) : 'updated ' + esc(D.asOf)}</span>` : ''}
         <button class="refresh" id="dbRefresh">↻ Refresh</button></div>
       <div class="seg">${DB_TABS.map(([k, l]) => `<button data-db="${k}" class="${dbState.db === k ? 'on' : ''}">${l}</button>`).join('')}</div>`;
   }
@@ -275,6 +322,7 @@
       renderDatabases();
     });
     const r = $('#dbRefresh'); if (r) r.onclick = () => renderDatabases(true);
+    const bk = $('#dbBack'); if (bk) bk.onclick = () => { dbState.db = ''; renderDbChooser(); };
   }
   const statusOf = (D, r) => D.map.status < 0 ? 'ACTIVE' : (String(r[D.map.status]).trim().toUpperCase() || 'ACTIVE');
   const valOf = (D, r, k) => {
@@ -284,17 +332,17 @@
   function filtered(D, except) {
     const q = dbState.q.trim().toUpperCase();
     return D.rows.filter(r => {
-      if (statusOf(D, r) !== dbState.status) return false;
+      if (D.status === 'ALL' && statusOf(D, r) !== dbState.status) return false;
       for (const [k] of FILTERS) { if (k !== except && dbState.f[k] && valOf(D, r, k).toUpperCase() !== dbState.f[k].toUpperCase()) return false; }
       if (q && !r.some(c => String(c).toUpperCase().includes(q))) return false;
       return true;
     });
   }
   const monthName2 = ym => { const [y, m] = ym.split('-').map(Number); return new Date(y, m - 1, 1).toLocaleDateString([], { month: 'short', year: 'numeric' }); };
-  function drawDatabase() {
-    const D = DBC[dbState.db]; if (!D) return;
-    const counts = { ACTIVE: 0, PURGED: 0 };
-    D.rows.forEach(r => { const s = statusOf(D, r); if (s in counts) counts[s]++; });
+  function drawDatabase(keepFocus) {
+    const D = DBC[dbKey()]; if (!D) return;
+    const hadFocus = keepFocus && document.activeElement && document.activeElement.id === 'dbQ';
+    const counts = D.counts || { ACTIVE: 0, PURGED: 0 };
     const list = filtered(D);
     const pages = Math.max(1, Math.ceil(list.length / PAGE)); if (dbState.page >= pages) dbState.page = pages - 1;
     const from = dbState.page * PAGE, show = list.slice(from, from + PAGE);
@@ -324,7 +372,8 @@
       ${pages > 1 ? `<div class="pager"><button class="refresh" id="pgPrev" ${dbState.page ? '' : 'disabled'}>‹ Previous</button>
         <span>Page ${dbState.page + 1} of ${fmtN(pages)}</span><button class="refresh" id="pgNext" ${dbState.page < pages - 1 ? '' : 'disabled'}>Next ›</button></div>` : ''}`;
     bindDbHead();
-    view.querySelectorAll('[data-st]').forEach(b => b.onclick = () => { dbState.status = b.dataset.st; dbState.f = { region: '', partner: '', province: '', month: '', cls: '' }; dbState.page = 0; drawDatabase(); });
+    view.querySelectorAll('[data-st]').forEach(b => b.onclick = () => { if (dbState.status === b.dataset.st) return; dbState.status = b.dataset.st; dbState.f = { region: '', partner: '', province: '', month: '', cls: '' }; dbState.page = 0; renderDatabases(); });
+    if (hadFocus) { const n = $('#dbQ'); n.focus(); n.setSelectionRange(n.value.length, n.value.length); }
     view.querySelectorAll('[data-f]').forEach(s2 => s2.onchange = () => { dbState.f[s2.dataset.f] = s2.value; dbState.page = 0; drawDatabase(); });
     const q = $('#dbQ'); let qt; q.oninput = () => { clearTimeout(qt); qt = setTimeout(() => { dbState.q = q.value; dbState.page = 0; drawDatabase(); const n = $('#dbQ'); n.focus(); n.setSelectionRange(n.value.length, n.value.length); }, 350); };
     const c = $('#dbClear'); if (c) c.onclick = () => { dbState.f = { region: '', partner: '', province: '', month: '', cls: '' }; dbState.q = ''; dbState.page = 0; drawDatabase(); };

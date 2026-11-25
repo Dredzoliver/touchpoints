@@ -108,3 +108,12 @@ table.data.db tbody tr:hover td { background:#FAFAFA; }
 .pager { display:flex; align-items:center; justify-content:center; gap:14px; margin-top:12px; font-size:14px; }
 .pager button:disabled { opacity:.4; }
 @media (max-width: 640px) { .seg.small { margin-left:0; } .filters-row .f { flex:1 1 45%; min-width:0; } }
+
+/* database chooser */
+.choose { display:grid; grid-template-columns:repeat(auto-fit, minmax(240px, 1fr)); gap:14px; }
+.pick { text-align:left; background:#fff; border:1px solid var(--line); border-top:5px solid var(--ink); border-radius:14px; padding:20px; cursor:pointer; font:inherit; color:var(--ink); }
+.pick:hover { box-shadow:0 4px 14px rgba(0,0,0,.08); }
+.pick span { display:block; font-size:18px; font-weight:800; }
+.pick b { display:block; font-size:34px; font-weight:800; margin-top:8px; font-variant-numeric:tabular-nums; }
+.pick small { display:block; color:var(--muted); font-size:13px; margin-top:2px; }
+.pick.dth { border-top-color:var(--brand); } .pick.loading { border-top-color:var(--yellow); } .pick.ott { border-top-color:#6B6B6B; }

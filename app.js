@@ -16,7 +16,9 @@
   function toast(msg, ms) { const t = $('#toast'); t.textContent = msg; t.style.display = 'block'; clearTimeout(toast.h); toast.h = setTimeout(() => t.style.display = 'none', ms || 3200); }
 
   const DEVICE_ID = ls.get('deviceId') || (() => { const d = 'D-' + uid(); ls.set('deviceId', d); return d; })();
-  let session = ls.get('session', null);   // {token, user:{name, position}}
+  let session = ls.get('session', null);   // {token, user:{name, position}, portalToken?, approver?:{name, role}}
+  const isRequestor = () => !!(session && session.token);   // can register / amend
+  const isApprover = () => !!(session && session.portalToken);   // has the Approvals section
   let boot = null;                          // reference data from the server (partners, classes, codes)
   let draft = null;                         // the request being filled in
   let syncing = false;
@@ -37,7 +39,11 @@
     let j;
     try { j = await res.json(); } catch (e) { throw new Error('Bad response from server'); }
     if (!j.ok) {
-      if (j.code === 'AUTH') { logout(true); }
+      if (j.code === 'AUTH') {
+        // lost approver access only → drop the Approvals section, keep the request screens
+        if (/^portal/.test(action) && isRequestor()) { session.portalToken = null; session.approver = null; ls.set('session', session); }
+        else logout(true);
+      }
       throw new ApiError(j.error || 'Request failed', j.code);
     }
     return j;
@@ -146,9 +152,15 @@
 
   async function refreshBoot(manual) {
     if (!session || !navigator.onLine) { if (manual) toast('No signal — using the data saved on this phone.'); return; }
+    if (!isRequestor()) { if (manual) { toast('Updated ✓'); if (stepName() === 'home' || stepName() === 'approvals') render(); } return; }
     try {
       const b = await api('bootstrap', { token: session.token }, 60000);
       boot = b; ls.set('boot:' + key(session.user.name), b);
+      // Approvals section follows PORTAL USERS (no need to log out and in again)
+      const had = isApprover();
+      session.portalToken = b.portal ? b.portal.portalToken : null; session.approver = b.portal ? b.portal.approver : null;
+      ls.set('session', session);
+      if (had !== isApprover() && stepName() === 'home') render();
       if (manual) toast('Data updated ✓');
       if (stepName() === 'home') render();
     } catch (e) { if (manual || !boot) toast(isNetErr(e) ? 'Could not reach the server.' : e.message, 5000); }
@@ -157,7 +169,7 @@
   function renderLogin() {
     view.innerHTML = `<div class="card">
       <h2>Log in</h2>
-      <p class="hint" style="margin-top:0">Use the password given to you by the admin.</p>
+      <p class="hint" style="margin-top:0">Use the password given to you by the admin (sales and approvers).</p>
       <label for="pw">Password</label>
       <input type="password" id="pw" autocomplete="current-password">
       <label class="check" style="font-weight:400"><input type="checkbox" id="showPw"> Show password</label>
@@ -175,10 +187,12 @@
     btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>Logging in…'; err.innerHTML = '';
     try {
       const r = await api('login', { password: pw });
-      session = { token: r.token, user: r.user }; ls.set('session', session);
-      btn.innerHTML = '<span class="spinner"></span>Loading your partners…';
-      boot = await api('bootstrap', { token: session.token }, 60000);
-      ls.set('boot:' + key(session.user.name), boot);
+      session = { token: r.token, user: r.user, portalToken: r.portalToken || null, approver: r.approver || null }; ls.set('session', session);
+      if (session.token) {
+        btn.innerHTML = '<span class="spinner"></span>Loading your partners…';
+        boot = await api('bootstrap', { token: session.token }, 60000);
+        ls.set('boot:' + key(session.user.name), boot);
+      }
       start();
     } catch (e) {
       err.innerHTML = `<div class="notice bad">${esc(isNetErr(e) ? 'Could not reach the server. Check your signal and try again.' : e.message)}</div>`;
@@ -222,11 +236,13 @@
     if (!session) return renderLogin();
     ({ home: renderHome, partner: renderPartner, photo: renderPhoto, location: renderLocation, type: renderType,
        details: renderDetails, agree: renderAgree, review: renderReview, done: renderDone,
-       amend: renderAmendMenu, amendCode: renderAmendCode, amendForm: renderAmendForm, amendReview: renderAmendReview, amendDone: renderAmendDone })[current]();
+       amend: renderAmendMenu, amendCode: renderAmendCode, amendForm: renderAmendForm, amendReview: renderAmendReview, amendDone: renderAmendDone,
+       approvals: renderApprovals, approval: renderApproval })[current]();
   }
 
   /* ---------- HOME ---------- */
   async function renderHome() {
+    if (!isRequestor()) { current = 'approvals'; return renderApprovals(); }   // approver-only login
     const queue = (await DB.all('queue').catch(() => [])).sort((a, b) => b.savedAt - a.savedAt);
     const hasDraft = !!(await DB.get('draft', 'current').catch(() => null));
     const loadedAt = boot && boot.loadedAt ? new Date(boot.loadedAt) : null;
@@ -244,6 +260,8 @@
           (today ? ' · works offline' : ' — connect to update')}</div>
       ${hasDraft ? `<div class="card"><h2>Unfinished request</h2><p class="hint" style="margin-top:0">You have a request you haven't sent yet.</p>
         <button class="btn dark" id="resumeBtn">Continue it</button><button class="btn ghost" id="dropDraftBtn">Delete it</button></div>` : ''}
+      ${isApprover() ? `<button class="big-choice" id="apprBtn">✅ Approvals <span class="badge" id="apprCount" hidden></span>
+        <small>Requests waiting for your decision</small></button>` : ''}
       <button class="big-choice" id="newBtn" ${boot && boot.partners.length ? '' : 'disabled'}>➕ Register New Touchpoint
         <small>New DTH Acquisition, Loading or OTT touchpoint</small></button>
       <button class="big-choice" id="amendBtn" ${boot && boot.partners.length ? '' : 'disabled'}>✏️ Amend Existing Touchpoint
@@ -258,6 +276,7 @@
 `;
     $('#newBtn').onclick = () => newDraft();
     $('#amendBtn').onclick = () => go('amend');
+    if (isApprover()) { $('#apprBtn').onclick = () => go('approvals'); approvalCount(); }
     loadMyRequests();
     if (hasDraft) {
       $('#resumeBtn').onclick = async () => { draft = await DB.get('draft', 'current'); go(draft.step || 'partner'); };
@@ -1140,11 +1159,133 @@
     }
   }
 
+  /* ======================= APPROVALS (RSM / RH / CH / DEPT / ADMIN) =======================
+     Requests waiting for this approver. Needs signal (live data). Same rules as the email "Review & decide". */
+  let apprItems = [], apprFilter = 'ALL', apprId = null, apprTimer = null;
+  const daysTxt = n => n == null ? '' : n === 0 ? 'today' : n === 1 ? '1 day' : n + ' days';
+
+  async function approvalCount() {
+    if (!navigator.onLine) return;
+    try {
+      apprItems = (await api('portalInbox', { token: session.portalToken }, 30000)).items;
+      const b = $('#apprCount'); if (b) { b.textContent = apprItems.length; b.hidden = !apprItems.length; }
+    } catch (e) {}
+  }
+
+  async function renderApprovals(quiet) {
+    clearInterval(apprTimer);
+    const back = isRequestor() ? `<button class="btn mini ghost" id="apprHome">‹ Home</button>` : '';
+    if (!navigator.onLine) { view.innerHTML = `<div class="bar">${back}<h2>Approvals</h2></div><div class="notice warn">No signal. Approvals need the internet — connect and tap Refresh.</div>
+      <button class="btn dark" id="apprRetry">↻ Refresh</button>`; bindAppr(); return; }
+    if (!quiet) view.innerHTML = `<div class="bar">${back}<h2>Approvals</h2></div><p class="hint"><span class="spinner"></span>Loading requests waiting for you…</p>`;
+    bindAppr();
+    try { apprItems = (await api('portalInbox', { token: session.portalToken }, 45000)).items; }
+    catch (e) { if (current !== 'approvals') return;
+      view.innerHTML = `<div class="bar">${back}<h2>Approvals</h2></div><div class="notice bad">${esc(isNetErr(e) ? 'Could not reach the server.' : e.message)}</div><button class="btn dark" id="apprRetry">Try again</button>`; bindAppr(); return; }
+    if (current !== 'approvals') return;
+    drawApprovals();
+    apprTimer = setInterval(() => { if (current === 'approvals' && document.visibilityState === 'visible') renderApprovals(true); }, 120000);
+  }
+  function bindAppr() {
+    const h = $('#apprHome'); if (h) h.onclick = () => { clearInterval(apprTimer); go('home'); };
+    const r = $('#apprRetry'); if (r) r.onclick = () => renderApprovals();
+    const f = $('#apprRefresh'); if (f) f.onclick = () => renderApprovals();
+  }
+  function drawApprovals() {
+    const n = k => apprItems.filter(i => k === 'ALL' || i.kind === k).length;
+    const list = apprItems.filter(i => apprFilter === 'ALL' || i.kind === apprFilter);
+    const back = isRequestor() ? `<button class="btn mini ghost" id="apprHome">‹ Home</button>` : '';
+    view.innerHTML = `<div class="bar">${back}<h2>Approvals</h2><button class="btn mini ghost" id="apprRefresh">↻ Refresh</button></div>
+      <p class="hint" style="margin:-4px 0 10px">Waiting for ${esc(session.approver.name)}${session.approver.role === 'ADMIN' ? ' · ADMIN' : ''}</p>
+      <div class="chips">${[['ALL', 'All'], ['NEW', 'New touchpoints'], ['AMEND', 'Amendments']].map(([k, l]) =>
+        `<button class="chip ${apprFilter === k ? 'on' : ''}" data-f="${k}">${l}<b class="${n(k) ? '' : 'zero'}">${n(k)}</b></button>`).join('')}</div>
+      ${list.length ? list.map(i => `<button class="item ${i.kind === 'AMEND' ? 'amend' : ''}" data-id="${esc(i.id)}">
+          <div class="t">${esc(i.trade || i.salescode)}</div>
+          <div class="m">${esc(i.action)} · ${esc(i.type)}<br>${esc(i.partner)}${i.muni ? ' · ' + esc(i.muni) + ', ' + esc(i.prov) : ''}<br>
+            From ${esc(i.requestor)} · ${esc(i.id)} · sent ${shortDate(i.submitted)}</div>
+          <div class="tags"><span class="tag ${i.waitingDays >= 3 ? 'late' : ''}">⏱ waiting ${daysTxt(i.waitingDays)}</span>
+            <span class="tag ${i.finalStep ? 'final' : ''}">${i.finalStep ? 'Final approval' : 'Step ' + esc(i.step)}</span>
+            ${i.resent ? '<span class="tag y">Corrected &amp; resent</span>' : ''}
+            ${i.transferredFrom ? `<span class="tag y">↪ from ${esc(i.transferredFrom)}</span>` : ''}</div></button>`).join('')
+        : `<div class="empty"><div class="big">✓</div><b>Nothing waiting for you.</b><br>New requests will appear here (and in your email).</div>`}`;
+    view.querySelectorAll('[data-f]').forEach(b => b.onclick = () => { apprFilter = b.dataset.f; drawApprovals(); });
+    view.querySelectorAll('.item[data-id]').forEach(b => b.onclick = () => { apprId = b.dataset.id; go('approval'); });
+    bindAppr();
+  }
+
+  async function renderApproval() {
+    clearInterval(apprTimer);
+    view.innerHTML = `<p class="hint"><span class="spinner"></span>Opening ${esc(apprId)}…</p>`;
+    let r;
+    try { r = await api('portalRequest', { token: session.portalToken, id: apprId }, 60000); }
+    catch (e) { toast(isNetErr(e) ? 'Could not reach the server.' : e.message, 4000); return go('approvals'); }
+    if (current !== 'approval') return;
+    const rows = r.rows.map(x => `<tr><td>${esc(x.label)}</td><td class="${x.red ? 'red' : ''}">${x.html ? x.value : esc(x.value).replace(/\n/g, '<br>')}</td></tr>`).join('');
+    view.innerHTML = `<div class="card detail">
+      <div class="bar"><button class="btn mini ghost" id="apprBack">‹ Back</button><h2 style="font-size:16px">${esc(r.id)}</h2>
+        ${r.waiting ? '<button class="btn mini dark" id="toDecide">Decide ↓</button>' : ''}</div>
+      <h2>${esc(r.title)}</h2>
+      <p class="hint" style="margin-top:0">${r.waiting ? (r.finalStep ? 'Final approval' : 'Approval step ' + esc(r.step)) + ' · ' + esc(r.approver) : 'Status: ' + esc(r.status)}</p>
+      ${r.photo ? `<img class="photo" src="${r.photo}" alt="Store photo" id="apprPhoto">` : ''}
+      ${r.lat ? `<p style="margin:4px 0 10px"><a href="https://www.google.com/maps?q=${esc(r.lat)},${esc(r.lng)}" target="_blank" rel="noopener">📍 Open location in Google Maps</a></p>` : ''}
+      <table class="sum">${rows}</table>
+      ${r.proofs.length ? `<h3>📎 Proof</h3><div class="proof">${r.proofs.map(p => p.src ? `<img src="${p.src}" alt="${esc(p.name)}" class="zoomable">`
+          : `<button class="btn ghost" data-pdf="${p.i}" style="margin:6px 0">📄 Open PDF: ${esc(p.name)}</button>`).join('')}</div>` : ''}
+      <h3>History</h3>
+      <ul class="hist">${r.history.map(h => `<li>${new Date(h.at).toLocaleString()} — ${esc(h.who)}: <b>${esc(h.what)}</b>${h.remarks ? ' — “' + esc(h.remarks) + '”' : ''}</li>`).join('')}</ul>
+      ${r.waiting ? `<div class="decide">
+        <label for="apprRemarks" style="margin-top:0">Remarks <span class="hint" style="display:inline">(required to Return or Reject)</span></label>
+        <textarea id="apprRemarks" rows="3" placeholder="What should be corrected, or why it is rejected"></textarea>
+        <div class="btns">
+          <button class="btn approve" data-d="APPROVE">✓ Approve${r.finalStep ? ' (final)' : ''}</button>
+          <button class="btn return" data-d="RETURN">↩ Return for correction</button>
+          <button class="btn reject" data-d="REJECT">✕ Reject</button>
+        </div></div>` : ''}</div>`;
+    $('#apprBack').onclick = () => go('approvals');
+    const td = $('#toDecide'); if (td) td.onclick = () => $('.decide').scrollIntoView({ behavior: 'smooth' });
+    view.querySelectorAll('#apprPhoto, .zoomable').forEach(img => img.onclick = () => zoomImg(img.src));
+    view.querySelectorAll('[data-pdf]').forEach(b => b.onclick = () => openPdf(r.id, b.dataset.pdf));
+    view.querySelectorAll('[data-d]').forEach(b => b.onclick = () => decideAppr(r, b.dataset.d));
+  }
+  function zoomImg(src) {
+    const z = document.createElement('div'); z.className = 'zoom'; z.innerHTML = `<img src="${src}" alt="">`;
+    z.onclick = () => z.remove(); document.body.appendChild(z);
+  }
+  async function openPdf(id, i) {
+    const w = window.open('', '_blank');   // opened right away so the phone doesn't block it
+    try {
+      const f = await api('portalFile', { token: session.portalToken, id, i: Number(i) }, 90000);
+      const bytes = Uint8Array.from(atob(f.data), c => c.charCodeAt(0));
+      const url = URL.createObjectURL(new Blob([bytes], { type: f.type }));
+      if (w) w.location.href = url; else location.href = url;
+    } catch (e) { if (w) w.close(); toast(isNetErr(e) ? 'Could not reach the server.' : e.message, 4000); }
+  }
+  async function decideAppr(r, d) {
+    const remarks = $('#apprRemarks').value.trim();
+    if (d !== 'APPROVE' && !remarks) { toast('Please write your remarks first.'); $('#apprRemarks').focus(); return; }
+    const q = { APPROVE: r.finalStep ? 'Approve this request (final)?' : 'Approve and send to the next approver?',
+                RETURN: 'Return this request to the requestor for correction?', REJECT: 'Reject this request? This ends the request.' }[d];
+    if (!confirm(q)) return;
+    view.querySelectorAll('[data-d]').forEach(b => { b.disabled = true; });
+    const btn = view.querySelector(`[data-d="${d}"]`); btn.innerHTML = '<span class="spinner"></span>Saving…';
+    try {
+      const res = await api('portalDecide', { token: session.portalToken, id: r.id, s: r.s, v: r.v, decision: d, remarks }, 90000);
+      view.innerHTML = `<div class="card center"><div class="done-mark">${d === 'APPROVE' ? '✅' : d === 'RETURN' ? '↩️' : '⛔'}</div>
+        <h2>${esc(r.id)}</h2><p>${esc(res.message)}</p><button class="btn" id="apprNext">Back to Approvals</button></div>`;
+      $('#apprNext').onclick = () => go('approvals');
+    } catch (e) {
+      toast(isNetErr(e) ? 'Could not reach the server.' : e.message, 5000);
+      view.querySelectorAll('[data-d]').forEach(b => { b.disabled = false; });
+      btn.innerHTML = { APPROVE: '✓ Approve', RETURN: '↩ Return for correction', REJECT: '✕ Reject' }[d];
+    }
+  }
+
   /* ======================= START ======================= */
   async function start() {
     ls.del('myReqs');   // old shared cache from an earlier version
     $('#menuBtn').hidden = false;
-    $('#who').textContent = session.user.name + ' · ' + session.user.position;
+    $('#who').textContent = session.user.name + ' · ' + (session.user.position || (session.approver && session.approver.role) || '');
+    if (!isRequestor()) { current = 'approvals'; render(); return; }
     boot = boot || ls.get('boot:' + key(session.user.name), null);
     startGps();
     const saved = await DB.get('draft', 'current').catch(() => null);

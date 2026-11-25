@@ -1,6 +1,6 @@
 /* Offline support. Online: always fetches the newest files (so your GitHub edits show up).
    Offline or very weak signal: uses the copy saved on the phone. No need to edit this file. */
-const CACHE = 'touchpoints-v3';
+const CACHE = 'touchpoints-v4';
 const FILES = ['./', './index.html', './styles.css', './app.js', './config.js', './manifest.webmanifest',
                './logo.png', './icon-192.png', './icon-512.png', './barangays.json'];
 

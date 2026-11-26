@@ -202,8 +202,8 @@
       ${r.photo ? `<img class="photo" src="${r.photo}" alt="Store photo" id="apprPhoto">` : ''}
       ${r.lat ? `<p style="margin:4px 0 10px"><a href="https://www.google.com/maps?q=${esc(r.lat)},${esc(r.lng)}" target="_blank" rel="noopener">📍 Open location in Google Maps</a></p>` : ''}
       <table class="sum">${rows}</table>
-      ${r.proofs.length ? `<h3>📎 Proof</h3><div class="proof">${r.proofs.map(p => p.src ? `<img src="${p.src}" alt="${esc(p.name)}" class="zoomable">`
-          : `<button class="btn ghost" data-pdf="${p.i}" style="margin:6px 0;max-width:520px">📄 Open PDF: ${esc(p.name)}</button>`).join('')}</div>` : ''}
+      ${r.proofs.length ? `<h3>📎 Attached Proof (${r.proofs.length})</h3><div class="proof">${r.proofs.map(p => p.src ? `<img src="${p.src}" alt="${esc(p.name)}" class="zoomable">`
+          : `<button class="btn ghost" data-pdf="${p.i}" style="margin:6px 0;max-width:520px">📄 Open ${p.type === 'application/pdf' ? 'PDF' : /word/.test(p.type) ? 'Word file' : /sheet|excel/.test(p.type) ? 'Excel file' : 'file'}: ${esc(p.name)}</button>`).join('')}</div>` : ''}
       <h3>History</h3>
       <ul class="hist">${r.history.map(h => `<li>${new Date(h.at).toLocaleString()} — ${esc(h.who)}: <b>${esc(h.what)}</b>${h.remarks ? ' — “' + esc(h.remarks) + '”' : ''}</li>`).join('')}</ul>
       ${r.waiting ? `<div class="decide">
@@ -218,7 +218,8 @@
       const w = window.open('', '_blank');
       try { const f = await api('portalFile', { token: session.portalToken, id: r.id, i: Number(b.dataset.pdf) }, 90000);
         const url = URL.createObjectURL(new Blob([Uint8Array.from(atob(f.data), c => c.charCodeAt(0))], { type: f.type }));
-        if (w) w.location.href = url; else location.href = url; }
+        if (f.type === 'application/pdf') { if (w) w.location.href = url; else location.href = url; }
+        else { if (w) w.close(); const a = document.createElement('a'); a.href = url; a.download = f.name; document.body.appendChild(a); a.click(); a.remove(); } }   // Word / Excel: download
       catch (e) { if (w) w.close(); toast(e.message, 4000); }
     });
     view.querySelectorAll('[data-d]').forEach(b => b.onclick = () => decide(r, b.dataset.d));

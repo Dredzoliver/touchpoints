@@ -435,57 +435,42 @@
   function purgeReset() { Object.assign(purge, { db: '', codes: [], src: '', loose: false, how: '', preview: null, previews: {}, done: {}, stage: 'start' }); }
   const dbLabel = k => (DB_TABS.find(t => t[0] === k) || [, k])[1];
 
-  // words that could be a Sales Code (letters/digits, 5–20 long); the server keeps only real matches
-  const codeWords = t => (String(t || '').toUpperCase().match(/[A-Z0-9]{5,20}/g) || []);
-  const isCodeHeader = h => ['SALESCODE', 'SALESCODES'].includes(String(h || '').toUpperCase().replace(/[^A-Z]/g, ''));   // not PRIMARY SALESCODE
-  let pdfReady = null;
-  function loadPdf() {
-    if (pdfReady) return pdfReady;
-    const base = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/';
-    pdfReady = new Promise((res, rej) => { const s = document.createElement('script'); s.src = base + 'pdf.min.js';
-      s.onload = () => { window.pdfjsLib.GlobalWorkerOptions.workerSrc = base + 'pdf.worker.min.js'; res(); };
-      s.onerror = () => { pdfReady = null; rej(new Error('Could not load the PDF reader. Check your internet.')); }; document.head.appendChild(s); });
-    return pdfReady;
+  // SECURITY (Frederick, 26 Nov 2026): a file is used only if it has a column headed SALESCODE (any case; "Sales Code" also OK,
+  // PRIMARY SALESCODE is not). Only that column is read. No such column → the file is rejected.
+  const isCodeHeader = h => ['SALESCODE', 'SALESCODES'].includes(String(h || '').toUpperCase().replace(/[^A-Z]/g, ''));
+  function codesFromTable(aoa) {   // rows → values under every SALESCODE column (header within the first 15 rows)
+    for (let r = 0; r < Math.min(15, aoa.length); r++) {
+      const cols = (aoa[r] || []).map((h, i) => isCodeHeader(h) ? i : -1).filter(i => i >= 0);
+      if (cols.length) { const out = []; aoa.slice(r + 1).forEach(row => cols.forEach(c => { const v = String((row || [])[c] || '').trim(); if (v) out.push(v); })); return out; }
+    }
+    return null;
   }
-  async function pdfText(buf) {
-    await loadPdf();
-    const doc = await window.pdfjsLib.getDocument({ data: new Uint8Array(buf) }).promise; let out = '';
-    for (let i = 1; i <= doc.numPages; i++) { const c = await (await doc.getPage(i)).getTextContent(); out += ' ' + c.items.map(x => x.str).join(' '); }
-    return out;
-  }
-  function officeText(buf) {   // .docx / .pptx are zip files of XML
-    const z = XLSX.CFB.read(new Uint8Array(buf), { type: 'array' }); let out = '';
+  function wordTables(buf) {   // .docx: tables only (a column needs a table)
+    const z = XLSX.CFB.read(new Uint8Array(buf), { type: 'array' }); const tables = [];
     z.FullPaths.forEach((p, i) => {
-      if (!/(word\/(document|header\d*|footer\d*)|ppt\/slides\/slide\d+)\.xml$/i.test(p)) return;
+      if (!/word\/document\.xml$/i.test(p)) return;
       const xml = new TextDecoder().decode(z.FileIndex[i].content);
-      out += ' ' + xml.replace(/<\/(w:p|w:tc|a:p)>|<(w:tab|w:br|a:br)\b[^>]*>/g, ' ').replace(/<[^>]+>/g, '');   // keep a word whole across formatting runs
+      (xml.match(/<w:tbl>[\s\S]*?<\/w:tbl>/g) || []).forEach(t => tables.push((t.match(/<w:tr[ >][\s\S]*?<\/w:tr>/g) || [])
+        .map(r => (r.match(/<w:tc[ >][\s\S]*?<\/w:tc>/g) || []).map(c => c.replace(/<\/w:p>/g, ' ').replace(/<[^>]+>/g, '').trim()))));
     });
-    return out;
+    return tables;
   }
   async function readCodesFromFile(f) {
     const ext = (f.name.split('.').pop() || '').toLowerCase(), buf = await f.arrayBuffer();
-    if (/^image\//.test(f.type) || ['jpg', 'jpeg', 'png', 'gif', 'heic', 'heif', 'webp', 'bmp', 'tif', 'tiff'].includes(ext))
-      throw new Error('Pictures and scans can\'t be read. Use the Excel, CSV, Word, PDF or text file, or paste the codes.');
+    const noCol = `No column with the header SALESCODE was found in "${f.name}", so the file was not used. Add a column headed SALESCODE with the codes under it, then upload again.`;
+    if (/^image\//.test(f.type) || ['jpg', 'jpeg', 'png', 'gif', 'heic', 'heif', 'webp', 'bmp', 'tif', 'tiff', 'pdf'].includes(ext))
+      throw new Error(`"${f.name}" can't be used — pictures, scans and PDFs have no columns. Use an Excel, CSV or Word file with a SALESCODE column.`);
     await loadXlsx();
-    if (ext === 'pdf') return { codes: codeWords(await pdfText(buf)), loose: true, how: 'PDF' };
-    if (['docx', 'docm', 'pptx', 'pptm', 'dotx'].includes(ext)) return { codes: codeWords(officeText(buf)), loose: true, how: ext.startsWith('d') ? 'Word' : 'PowerPoint' };
-    if (['txt', 'text', 'log', 'md', 'json', 'xml', 'html', 'htm', 'eml'].includes(ext))
-      return { codes: codeWords(new TextDecoder().decode(buf).replace(/<[^>]+>/g, ' ')), loose: true, how: 'text' };
-    let wb = null; try { wb = XLSX.read(buf, { type: 'array' }); } catch (e) {}
-    if (wb && wb.SheetNames.length) {   // spreadsheet: a SALESCODE column if there is one, otherwise every cell
-      const codes = []; let byCol = 0, loose = false;
-      wb.SheetNames.forEach(n => {
-        const aoa = XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, raw: false, defval: '' });
-        let hr = -1, cols = [];
-        for (let r = 0; r < Math.min(15, aoa.length) && hr < 0; r++) { cols = (aoa[r] || []).map((h, i) => isCodeHeader(h) ? i : -1).filter(i => i >= 0); if (cols.length) hr = r; }
-        if (hr >= 0) { byCol++; aoa.slice(hr + 1).forEach(r => cols.forEach(c => { const v = String(r[c] || '').trim(); if (v) codes.push(v); })); }
-        else { loose = true; aoa.forEach(r => r.forEach(v => { const t = String(v || '').trim(); if (t) codes.push(...codeWords(t)); })); }
-      });
-      return { codes, loose, how: byCol ? 'SALESCODE column' : 'all cells' };
+    let found = null, how = '';
+    if (['docx', 'docm', 'dotx'].includes(ext)) {
+      for (const t of wordTables(buf)) { const c = codesFromTable(t); if (c) { found = (found || []).concat(c); how = 'SALESCODE column, Word table'; } }
+    } else {
+      let wb = null; try { wb = XLSX.read(buf, { type: 'array' }); } catch (e) {}   // Excel, CSV, ODS, text tables, web tables…
+      if (wb) wb.SheetNames.forEach(n => { const c = codesFromTable(XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, raw: false, defval: '' }));
+        if (c) { found = (found || []).concat(c); how = 'SALESCODE column'; } });
     }
-    // anything else (e.g. old .doc): read the readable text out of it
-    const bytes = new Uint8Array(buf);
-    return { codes: codeWords(new TextDecoder('latin1').decode(bytes) + ' ' + new TextDecoder('utf-16le').decode(bytes)), loose: true, how: 'text found in the file' };
+    if (!found) throw new Error(noCol);
+    return { codes: found, loose: false, how };
   }
   const uniqCodes = a => { const s = new Set(); return a.map(x => String(x).toUpperCase().replace(/\s+/g, '')).filter(x => x && !s.has(x) && s.add(x)); };
 
@@ -500,10 +485,10 @@
     body().innerHTML = fresh ? `<section class="block"><h3>1 · Which database?</h3>
         <div class="seg">${DB_TABS.map(([k, l]) => `<button data-pdb="${k}" class="${p.db === k ? 'on' : ''}">${l}</button>`).join('')}</div></section>
       <section class="block" ${p.db ? '' : 'hidden'}><h3>2 · List of Sales Codes to purge</h3>
-        <p class="hint" style="margin-top:0">Upload the list in <b>any format</b> — Excel, CSV, Word, PowerPoint, PDF or text. The system finds the Sales Codes in it.
-          Best: a column named <b>SALESCODE</b> (then only that column is used). You can also paste the codes.</p>
-        <input type="file" id="pFile">
-        ${p.src ? `<div class="hint ok">✓ ${esc(p.src)} — ${fmtN(p.codes.length)} possible Sales Code${p.codes.length === 1 ? '' : 's'} read (${esc(p.how)})</div>` : ''}
+        <p class="hint" style="margin-top:0">Upload an Excel, CSV or Word file. 🔒 <b>The file must have a column headed SALESCODE</b> (capital or small letters) —
+          only that column is read; a file without it is rejected. You can also paste the codes.</p>
+        <input type="file" id="pFile" accept=".xlsx,.xlsm,.xlsb,.xls,.ods,.csv,.tsv,.txt,.docx,.docm,.dotx"><div id="pErr"></div>
+        ${p.src ? `<div class="hint ok">✓ ${esc(p.src)} — ${fmtN(p.codes.length)} Sales Code${p.codes.length === 1 ? '' : 's'} read from the ${esc(p.how)}</div>` : ''}
         <label for="pPaste">…or paste codes</label><textarea id="pPaste" rows="4" placeholder="ABC1234526&#10;XYZ0001226">${p.src ? '' : esc(p.codes.join('\n'))}</textarea>
         <button class="btn dark" id="pPrev" style="max-width:300px;margin-top:12px">Match with ${esc(dbLabel(p.db))}</button></section>
       <div id="pResult"></div>`
@@ -519,7 +504,7 @@
         if (!codes.length) throw new Error('No Sales Codes were found in this file.');
         if (codes.length > PURGE_MAX) throw new Error(`The file has ${fmtN(codes.length)} possible codes — the limit is ${fmtN(PURGE_MAX)}. Split the file, or use a SALESCODE column.`);
         Object.assign(p, { codes, src: f.name, loose: r.loose, how: r.how, preview: null, previews: {} }); toolPurge();
-      } catch (err) { toast('Could not read the file: ' + err.message, 6000); box.disabled = false; box.value = ''; }
+      } catch (err) { Object.assign(p, { codes: [], src: '', how: '', preview: null, previews: {} }); toolPurge(); $('#pErr').innerHTML = `<div class="notice bad"><b>File rejected</b>${esc(err.message)}</div>`; }
     };
     $('#pPaste').oninput = e => { Object.assign(p, { src: '', loose: false, how: 'pasted', preview: null, previews: {} }); p.codes = uniqCodes(e.target.value.split(/[\s,;]+/)); };
     $('#pPrev').onclick = () => { if (!p.codes.length) return toast('Add the Sales Codes first.'); purgeCheck($('#pPrev')); };

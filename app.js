@@ -554,9 +554,9 @@
         <div class="hint" id="contactHint">11-digit mobile number starting with 0</div>` : ''}
       ${t.loading ? `<h3>Loading</h3>
         <label for="loadingClass">Loading Classification <span class="req">*</span></label><select id="loadingClass">${opts(boot.loadingClasses, draft.loadingClass)}</select>
-        <label for="loadingPrimary">Primary Code <span class="hint" style="display:inline">(optional)</span></label>
+        <label for="loadingPrimary" id="loadingPrimaryLab">${primaryLabel()}</label>
         <input type="text" id="loadingPrimary" value="${esc(draft.loadingPrimary)}" autocapitalize="characters" spellcheck="false">
-        <div id="primaryHint" class="hint">Leave blank if none. If filled, it must be an active Loading touchpoint of ${esc(draft.partner)}.</div>` : ''}
+        <div id="primaryHint" class="hint"></div>` : ''}
       ${t.ott ? `<h3>OTT Acquisition</h3>
         <label for="ottClass">OTT Classification <span class="req">*</span></label><select id="ottClass">${opts(boot.ottClasses, draft.ottClass)}</select>
         <label for="ottPrimary">Primary Salescode <span class="hint" style="display:inline">(optional)</span></label>
@@ -565,7 +565,9 @@
       <h3>Proof</h3>
       ${proofFieldHtml(draft.kept)}
       ${navBtns('Next ›', false, 'type')}</div>`;
-    const bind = (id, prop) => { const el = $('#' + id); if (el) el.oninput = el.onchange = () => { draft[prop] = el.value; saveDraft(); if (id === 'loadingPrimary' || id === 'ottPrimary') checkPrimary(); if (id === 'contact') mobileHint(el, $('#contactHint')); }; };
+    const bind = (id, prop) => { const el = $('#' + id); if (el) el.oninput = el.onchange = () => { draft[prop] = el.value; saveDraft();
+      if (id === 'loadingClass') { const l = $('#loadingPrimaryLab'); if (l) l.innerHTML = primaryLabel(); checkPrimary(); }
+      if (id === 'loadingPrimary' || id === 'ottPrimary') checkPrimary(); if (id === 'contact') mobileHint(el, $('#contactHint')); }; };
     if ($('#contact') && draft.contact) mobileHint($('#contact'), $('#contactHint'));
     [['tradeName', 'tradeName'], ['dthClass', 'dthClass'], ['owner', 'owner'], ['contact', 'contact'], ['loadingClass', 'loadingClass'],
      ['loadingPrimary', 'loadingPrimary'], ['ottClass', 'ottClass'], ['ottPrimary', 'ottPrimary']].forEach(([a, b]) => bind(a, b));
@@ -586,6 +588,9 @@
     h.textContent = ok ? '✓ Valid mobile number' : !/^\d+$/.test(d) ? '✗ Numbers only' : d[0] !== '0' ? '✗ Must start with 0' : '✗ ' + d.length + ' of 11 digits';
     inp.classList.toggle('invalid', !ok);
   }
+  // RETAILER (Loading Classification) must have a Primary Code — Frederick, 26 Nov 2026 (new requests)
+  const needsPrimary = () => String(draft.loadingClass || '').trim().toUpperCase() === 'RETAILER';
+  const primaryLabel = () => needsPrimary() ? 'Primary Code <span class="req">*</span>' : 'Primary Code <span class="hint" style="display:inline">(optional)</span>';
   // Primary Code must be an ACTIVE Loading touchpoint of the SAME partner
   function primaryOk(val) {
     const c = normCode(val === undefined ? draft.loadingPrimary : val); if (!c) return true;
@@ -596,7 +601,9 @@
     [['loadingPrimary', 'primaryHint'], ['ottPrimary', 'ottPrimaryHint']].forEach(([id, hid]) => {
       const h = $('#' + hid), inp = $('#' + id); if (!h || !inp) return;
       const c = normCode(draft[id]);
-      if (!c) { h.className = 'hint'; h.textContent = 'Leave blank if none. If filled, it must be an active Loading touchpoint of ' + draft.partner + '.'; inp.classList.remove('invalid'); return; }
+      if (!c) { h.className = 'hint'; inp.classList.remove('invalid');
+        h.textContent = id === 'loadingPrimary' && needsPrimary() ? 'Required for RETAILER: an active Loading touchpoint of ' + draft.partner + '.'
+          : 'Leave blank if none. If filled, it must be an active Loading touchpoint of ' + draft.partner + '.'; return; }
       const ok = primaryOk(draft[id]);
       h.className = 'hint ' + (ok ? 'ok' : 'bad');
       h.textContent = ok ? '✓ Active Loading touchpoint of ' + draft.partner : '✗ Not an active Loading touchpoint of ' + draft.partner + '. Please check the code.';
@@ -612,7 +619,9 @@
       if (!draft.contact.trim()) return 'Please enter the Contact Number';
       if (!mobileOk(draft.contact)) return 'Contact Number must be 11 digits starting with 0 (e.g. 09171234567)';
     }
-    if (t.loading) { if (!draft.loadingClass) return 'Please choose the Loading Classification'; if (!primaryOk()) return 'Primary Code is not an active Loading touchpoint of ' + draft.partner; }
+    if (t.loading) { if (!draft.loadingClass) return 'Please choose the Loading Classification';
+      if (needsPrimary() && !normCode(draft.loadingPrimary)) return 'Primary Code is required for a RETAILER';
+      if (!primaryOk()) return 'Primary Code is not an active Loading touchpoint of ' + draft.partner; }
     if (t.ott && !draft.ottClass) return 'Please choose the OTT Classification';
     if (t.ott && !primaryOk(draft.ottPrimary)) return 'OTT Primary Salescode is not an active Loading touchpoint of ' + draft.partner;
     if (!proofCount(draft)) return PROOF_NEED;

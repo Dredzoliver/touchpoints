@@ -95,6 +95,7 @@
     else if (tab === 'databases') renderDatabases();
     else if (tab === 'tools') renderTools();
     else if (tab === 'returned') { if (retLoaded) drawReturned(); else renderReturned(); }
+    else if (tab === 'search') renderSearch();
     else { if (apprLoaded) drawApprovals(); else renderApprovals(); }
   }
   function start() {
@@ -192,12 +193,15 @@
     view.innerHTML = `<p class="hint"><span class="spinner"></span>Opening ${esc(id)}…</p>`;
     let r;
     try { r = await api('portalRequest', { token: session.portalToken, id }, 60000); }
-    catch (e) { toast(e.message, 4000); return from === 'dashboard' ? drawDashboard() : from === 'returned' ? drawReturned() : renderApprovals(); }
+    catch (e) { if (from === 'search') { renderSearch(); const m = $('#findMsg'); if (m) m.innerHTML = `<div class="notice bad">${esc(e.message)}</div>`; return; }
+      toast(e.message, 4000); return from === 'dashboard' ? drawDashboard() : from === 'returned' ? drawReturned() : renderApprovals(); }
+    if (from === 'search') rememberSearch(r.id);
     const rows = r.rows.map(x => `<tr><td>${esc(x.label)}</td><td class="${x.red ? 'red' : ''}">${x.html ? x.value : esc(x.value).replace(/\n/g, '<br>')}</td></tr>`).join('');
     view.innerHTML = `<div class="card detail">
       <div class="bar"><button class="refresh" id="apprBack">‹ Back</button><h2 style="font-size:16px">${esc(r.id)}</h2>
         ${r.waiting ? '<button class="btn mini dark" id="toDecide">Decide ↓</button>' : ''}</div>
       <h2>${esc(r.title)}</h2>
+      ${r.info ? statusCard(r.info) : ''}
       <p class="hint" style="margin-top:0">${r.waiting ? (r.finalStep ? 'Final approval' : 'Approval step ' + esc(r.step)) + ' · ' + esc(r.approver) : 'View only · status ' + esc(r.status) + (r.status === 'FOR APPROVAL' && r.approver ? ' · waiting for ' + esc(r.approver) : '')}</p>
       ${r.photo ? `<img class="photo" src="${r.photo}" alt="Store photo" id="apprPhoto">` : ''}
       ${r.lat ? `<p style="margin:4px 0 10px"><a href="https://www.google.com/maps?q=${esc(r.lat)},${esc(r.lng)}" target="_blank" rel="noopener">📍 Open location in Google Maps</a></p>` : ''}
@@ -211,7 +215,7 @@
         <textarea id="apprRemarks" rows="3" placeholder="What should be corrected, or why it is rejected"></textarea>
         <div class="btns"><button class="btn approve" data-d="APPROVE">✓ Approve${r.finalStep ? ' (final)' : ''}</button>
           <button class="btn return" data-d="RETURN">↩ Return for correction</button><button class="btn reject" data-d="REJECT">✕ Reject</button></div></div>` : ''}</div>`;
-    $('#apprBack').onclick = () => from === 'dashboard' ? drawDashboard() : from === 'returned' ? drawReturned() : renderApprovals();
+    $('#apprBack').onclick = () => from === 'search' ? renderSearch() : from === 'dashboard' ? drawDashboard() : from === 'returned' ? drawReturned() : renderApprovals();
     const td = $('#toDecide'); if (td) td.onclick = () => $('.decide').scrollIntoView({ behavior: 'smooth' });
     view.querySelectorAll('#apprPhoto, .zoomable').forEach(img => img.onclick = () => { const z = document.createElement('div'); z.className = 'zoom'; z.innerHTML = `<img src="${img.src}" alt="">`; z.onclick = () => z.remove(); document.body.appendChild(z); });
     view.querySelectorAll('[data-pdf]').forEach(b => b.onclick = async () => {
@@ -225,6 +229,50 @@
     view.querySelectorAll('[data-d]').forEach(b => b.onclick = () => decide(r, b.dataset.d));
     scrollTo(0, 0);
   }
+  /* ---------- Search a request (Frederick, 26 Nov 2026) — ADMIN and DEPT ---------- */
+  // "TPR-2026-00021", "2026-21" or just "21" (this year)
+  function normRequestId(v) {
+    v = String(v || '').trim().toUpperCase().replace(/\s+/g, '');
+    let m = v.match(/^(?:TPR-?)?(\d{4})-?(\d{1,5})$/); if (m && v.length > 5) return `TPR-${m[1]}-${m[2].padStart(5, '0')}`;
+    m = v.match(/^(?:TPR-?)?(\d{1,5})$/); if (m) return `TPR-${new Date().getFullYear()}-${m[1].padStart(5, '0')}`;
+    return v;
+  }
+  const recentKey = 'tpAdminRecent';
+  function recentSearches() { try { return JSON.parse(localStorage.getItem(recentKey) || '[]'); } catch (e) { return []; } }
+  function rememberSearch(id) { try { localStorage.setItem(recentKey, JSON.stringify([id].concat(recentSearches().filter(x => x !== id)).slice(0, 8))); } catch (e) {} }
+  function renderSearch(val) {
+    const rec = recentSearches();
+    view.innerHTML = `<div class="card find-card"><h2>Search a request</h2>
+      <p class="hint" style="margin-top:0">Type the request reference number to see all its details, the approval flow and where it is now.</p>
+      <form id="findForm" class="find-row" autocomplete="off">
+        <input type="text" id="findId" placeholder="e.g. TPR-2026-00021 or 21" value="${esc(val || '')}" autocapitalize="characters" spellcheck="false">
+        <button class="btn" type="submit">🔍 Search</button></form>
+      <div id="findMsg"></div>
+      ${rec.length ? `<p class="hint">Recent: ${rec.map(id => `<button class="chip" data-find="${esc(id)}">${esc(id)}</button>`).join(' ')}</p>` : ''}</div>`;
+    const go = id => { id = normRequestId(id); if (!id) { $('#findId').focus(); return; } openApproval(id, 'search'); };
+    $('#findForm').onsubmit = e => { e.preventDefault(); go($('#findId').value); };
+    view.querySelectorAll('[data-find]').forEach(b => b.onclick = () => go(b.dataset.find));
+    setTimeout(() => { const i = $('#findId'); if (i) i.focus(); }, 50);
+  }
+  // where the request is now — on process / returned / rejected / approved / cancelled
+  function statusCard(s) {
+    const line = (k, v) => v ? `<div class="st-line"><span>${k}</span><b>${esc(v)}</b></div>` : '';
+    const ago = d => d == null ? '' : d === 0 ? 'today' : d === 1 ? '1 day' : d + ' days';
+    const head = { PROCESS: ['🕒', 'On process'], RETURNED: ['↩', 'Returned to requestor'], REJECTED: ['⛔', 'Rejected'],
+      APPROVED: ['✅', 'Approved'], ACTION: ['⚠', 'Approved — action needed'], CANCELLED: ['✕', 'Cancelled'] }[s.state] || ['•', s.status];
+    let body = '';
+    if (s.state === 'PROCESS') body = line('Waiting for', s.who) + line('Approval step', s.step + (s.final ? ' (final approval)' : '')) +
+      line('Email', s.email) + line('Waiting since', s.since + (s.days != null ? ' · ' + ago(s.days) : ''));
+    else if (s.state === 'RETURNED') body = line('Returned by', s.who) + line('When', s.when) + line('Reason', s.why || '—') +
+      line('Now with', s.requestor + ' (to correct and resend)') + line('Waiting', ago(s.days));
+    else if (s.state === 'REJECTED') body = line('Rejected by', s.who) + line('When', s.when) + line('Reason', s.why || '—');
+    else if (s.state === 'CANCELLED') body = line('Cancelled by', s.who) + line('When', s.when) + line('Reason', s.why);
+    else if (s.state === 'APPROVED' || s.state === 'ACTION') body = line('Approved on', s.when) + line('Final approval by', s.who) +
+      (s.code ? `<div class="st-code"><span>Sales Code</span><b>${esc(s.code)}</b></div>` : '') + line('Problem', s.problem);
+    return `<div class="st-card st-${(s.state || '').toLowerCase()}"><div class="st-head"><span class="ic">${head[0]}</span>${esc(head[1])}</div>
+      ${body}${line('Requested by', s.requestor + (s.submitted ? ' · ' + s.submitted : ''))}</div>`;
+  }
+
   async function decide(r, d) {
     const remarks = $('#apprRemarks').value.trim();
     if (d !== 'APPROVE' && !remarks) { toast('Please write your remarks first.'); $('#apprRemarks').focus(); return; }

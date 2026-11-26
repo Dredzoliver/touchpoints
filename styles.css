@@ -238,3 +238,13 @@ input.need.missing, select.need.missing, textarea.need.missing, input.invalid { 
 .autobox b { display:block; font-size:15px; color:var(--ink); }
 .autobox .sub { display:block; font-size:12px; color:var(--muted); margin-top:3px; }
 .autotag { position:absolute; top:9px; right:10px; font-size:10px; font-weight:800; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); background:#E3E3E3; border-radius:99px; padding:2px 7px; }
+
+/* Attached Proof (required) */
+.proof-box { border:2px dashed #E3B24A; background:#FFF8E6; border-radius:12px; padding:6px 12px 12px; margin-top:6px; }
+.proof-box.filled { border:1px solid var(--line); background:#fff; }
+.proof-box.missing { border:2px solid var(--bad); background:#FFF0F1; }
+.proof-empty { color:var(--muted); font-size:14px; padding:8px 0 4px; }
+.proof-btns { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:8px; }
+.proof-btns .btn { margin:0; padding:12px 10px; font-size:14px; }
+@media (max-width: 380px) { .proof-btns { grid-template-columns:1fr; } }
+.list-item .pdf { font-size:12px; }

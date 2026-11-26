@@ -164,4 +164,25 @@ main { padding-right:16px; }
 .fb.zero { opacity:.55; box-shadow:0 3px 10px rgba(0,0,0,.12); }
 @media (prefers-reduced-motion: reduce) { .fb .n.ring { animation:none; } }
 /* DEPT has the floating ↻ Refresh, so the page Refresh buttons are hidden (ADMIN keeps them) */
-body.has-fab #dashRefresh, body.has-fab #apprRefresh, body.has-fab #dbRefresh, body.has-fab #retRefresh { display:none; }
+body.dept-fab #dashRefresh, body.dept-fab #apprRefresh, body.dept-fab #dbRefresh, body.dept-fab #retRefresh { display:none; }
+
+/* Bulk purge — step by step across databases */
+.psteps { display:flex; flex-wrap:wrap; gap:8px; margin:6px 0 12px; }
+.pstep { border:1px solid var(--line); background:#fff; border-radius:99px; padding:6px 12px; font-size:13px; font-weight:700; color:var(--muted); }
+.pstep.now { border-color:var(--ink); color:var(--ink); }
+.pstep.done { background:#2B2B2B; border-color:#2B2B2B; color:#fff; }
+.pbig { font-size:18px; margin:4px 0 12px; } .pbig b:first-child { font-size:34px; color:var(--brand); margin-right:4px; }
+.pbig.none b:first-child { color:var(--muted); }
+.pact { display:flex; flex-wrap:wrap; align-items:center; gap:10px; margin-top:14px; } .pact .btn { width:auto; max-width:none; padding:12px 18px; }
+.pnext { display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:12px; }
+.pnext .pick strong { color:var(--brand); font-size:20px; }
+.pick.end { border-top-color:#6B6B6B; background:#FAFAFA; }
+
+/* floating Download database (Databases tab, both logins) — Excel green */
+.fb-xlsx { background:#107C41; color:#fff; padding-right:18px; text-align:left; }
+.fb-xlsx .ic.xl { background:#fff; }
+.fb-xlsx .lb { display:flex; flex-direction:column; line-height:1.15; }
+.fb-xlsx .lb small { font-weight:600; font-size:11.5px; opacity:.9; max-width:230px; white-space:normal; }
+.fb-xlsx:disabled { opacity:.5; cursor:default; }
+.fb-xlsx .spinner { border-color:rgba(255,255,255,.4); border-top-color:#fff; }
+@media (max-width: 640px) { .fb-xlsx { padding:6px; } .fb-xlsx .lb { display:none; } }   /* phone: Excel icon only */

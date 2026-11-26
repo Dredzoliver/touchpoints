@@ -86,7 +86,9 @@
   document.querySelectorAll('#tabs [data-tab]').forEach(b => b.onclick = () => { tab = b.dataset.tab; show(); });
   // On Process now tiles are counts only (not clickable) — Frederick, 25 Nov 2026
   function goTab(t) { tab = t; show(); scrollTo(0, 0); }
+  let dl = null;   // what the floating Download database button exports (Databases tab, list on screen)
   function show() {
+    dl = null; drawFab();
     document.querySelectorAll('#tabs [data-tab]').forEach(b => b.classList.toggle('on', b.dataset.tab === tab));
     // already loaded → show instantly; fresh data comes from ↻ Refresh, the 5-minute timer, or after a decision
     if (tab === 'dashboard') { if (dash) drawDashboard(); else renderDashboard(); }
@@ -275,6 +277,7 @@
     return loading[k];
   }
   function renderDbChooser() {
+    dl = null; drawFab();
     const tp = dash && dash.touchpoints;
     view.innerHTML = `<div class="head"><h2>Databases</h2></div>
       <p class="hint" style="margin:-6px 0 14px">Choose which database to open. Only that one is loaded.</p>
@@ -287,6 +290,7 @@
   }
   async function renderDatabases(force) {
     if (!dbState.db) return renderDbChooser();
+    if (dl && dl.D !== DBC[dbKey()]) { dl = null; drawFab(); }
     const k = dbKey(), [db, status] = k.split(':');
     if (!DBC[k]) { const saved = await IDB.get(k); if (saved && !DBC[k]) { DBC[k] = saved; DBC[k].stale = true; } }
     if (tab !== 'databases' || dbKey() !== k) return;
@@ -361,8 +365,6 @@
       <div class="listbar">
         <span><b>${fmtN(list.length)}</b> ${dbState.status === 'ACTIVE' ? 'active' : 'purged'} record${list.length === 1 ? '' : 's'}${hasFilter ? ' (filtered)' : ''}${list.length > PAGE ? ` · showing ${fmtN(from + 1)}–${fmtN(from + show.length)}` : ''}</span>
         ${hasFilter ? '<button class="linkish" id="dbClear" style="padding:0">Clear filters</button>' : ''}
-        <span style="flex:1"></span>
-        <button class="btn mini" id="dbXlsx" ${list.length ? '' : 'disabled'}>⬇ Download Excel (${fmtN(list.length)})</button>
       </div>
       <div class="tablewrap"><table class="data db"><thead><tr>${D.columns.map(c => `<th>${esc(c)}</th>`).join('')}</tr></thead>
         <tbody>${show.map(r => `<tr>${D.columns.map((c, i) => `<td>${esc(r[i])}</td>`).join('')}</tr>`).join('') ||
@@ -377,7 +379,7 @@
     const c = $('#dbClear'); if (c) c.onclick = () => { dbState.f = { region: '', partner: '', province: '', month: '', cls: '' }; dbState.q = ''; dbState.page = 0; drawDatabase(); };
     const p1 = $('#pgPrev'); if (p1) p1.onclick = () => { dbState.page--; drawDatabase(); scrollTo(0, 0); };
     const p2 = $('#pgNext'); if (p2) p2.onclick = () => { dbState.page++; drawDatabase(); scrollTo(0, 0); };
-    $('#dbXlsx').onclick = () => downloadXlsx(D, list);
+    dl = { D, list, filtered: !!hasFilter }; drawFab();   // floating "Download database" = exactly this list
   }
 
   // Excel download of exactly what the filters show (SheetJS, loaded only when needed)
@@ -424,68 +426,167 @@
   }
   const body = () => $('#toolBody');
 
-  /* ---------- Bulk purge ---------- */
-  const purge = { db: '', codes: [], file: '', preview: null };
+  /* ---------- Bulk purge (Frederick, 26 Nov 2026) ----------
+     Choose a database → upload ANY file (Excel/CSV/ODS, Word, PowerPoint, PDF, text…) or paste → the system finds the Sales Codes,
+     matches them with that database and says how many will be purged → confirm → PURGED. Then it offers the SAME list for the
+     next database (with how many each would purge) until the user ends or all three databases are done. */
+  const purge = { db: '', codes: [], src: '', loose: false, how: '', preview: null, previews: {}, done: {}, stage: 'start' };
+  const PURGE_MAX = 20000;
+  function purgeReset() { Object.assign(purge, { db: '', codes: [], src: '', loose: false, how: '', preview: null, previews: {}, done: {}, stage: 'start' }); }
+  const dbLabel = k => (DB_TABS.find(t => t[0] === k) || [, k])[1];
+
+  // words that could be a Sales Code (letters/digits, 5–20 long); the server keeps only real matches
+  const codeWords = t => (String(t || '').toUpperCase().match(/[A-Z0-9]{5,20}/g) || []);
+  const isCodeHeader = h => ['SALESCODE', 'SALESCODES'].includes(String(h || '').toUpperCase().replace(/[^A-Z]/g, ''));   // not PRIMARY SALESCODE
+  let pdfReady = null;
+  function loadPdf() {
+    if (pdfReady) return pdfReady;
+    const base = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/';
+    pdfReady = new Promise((res, rej) => { const s = document.createElement('script'); s.src = base + 'pdf.min.js';
+      s.onload = () => { window.pdfjsLib.GlobalWorkerOptions.workerSrc = base + 'pdf.worker.min.js'; res(); };
+      s.onerror = () => { pdfReady = null; rej(new Error('Could not load the PDF reader. Check your internet.')); }; document.head.appendChild(s); });
+    return pdfReady;
+  }
+  async function pdfText(buf) {
+    await loadPdf();
+    const doc = await window.pdfjsLib.getDocument({ data: new Uint8Array(buf) }).promise; let out = '';
+    for (let i = 1; i <= doc.numPages; i++) { const c = await (await doc.getPage(i)).getTextContent(); out += ' ' + c.items.map(x => x.str).join(' '); }
+    return out;
+  }
+  function officeText(buf) {   // .docx / .pptx are zip files of XML
+    const z = XLSX.CFB.read(new Uint8Array(buf), { type: 'array' }); let out = '';
+    z.FullPaths.forEach((p, i) => {
+      if (!/(word\/(document|header\d*|footer\d*)|ppt\/slides\/slide\d+)\.xml$/i.test(p)) return;
+      const xml = new TextDecoder().decode(z.FileIndex[i].content);
+      out += ' ' + xml.replace(/<\/(w:p|w:tc|a:p)>|<(w:tab|w:br|a:br)\b[^>]*>/g, ' ').replace(/<[^>]+>/g, '');   // keep a word whole across formatting runs
+    });
+    return out;
+  }
+  async function readCodesFromFile(f) {
+    const ext = (f.name.split('.').pop() || '').toLowerCase(), buf = await f.arrayBuffer();
+    if (/^image\//.test(f.type) || ['jpg', 'jpeg', 'png', 'gif', 'heic', 'heif', 'webp', 'bmp', 'tif', 'tiff'].includes(ext))
+      throw new Error('Pictures and scans can\'t be read. Use the Excel, CSV, Word, PDF or text file, or paste the codes.');
+    await loadXlsx();
+    if (ext === 'pdf') return { codes: codeWords(await pdfText(buf)), loose: true, how: 'PDF' };
+    if (['docx', 'docm', 'pptx', 'pptm', 'dotx'].includes(ext)) return { codes: codeWords(officeText(buf)), loose: true, how: ext.startsWith('d') ? 'Word' : 'PowerPoint' };
+    if (['txt', 'text', 'log', 'md', 'json', 'xml', 'html', 'htm', 'eml'].includes(ext))
+      return { codes: codeWords(new TextDecoder().decode(buf).replace(/<[^>]+>/g, ' ')), loose: true, how: 'text' };
+    let wb = null; try { wb = XLSX.read(buf, { type: 'array' }); } catch (e) {}
+    if (wb && wb.SheetNames.length) {   // spreadsheet: a SALESCODE column if there is one, otherwise every cell
+      const codes = []; let byCol = 0, loose = false;
+      wb.SheetNames.forEach(n => {
+        const aoa = XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, raw: false, defval: '' });
+        let hr = -1, cols = [];
+        for (let r = 0; r < Math.min(15, aoa.length) && hr < 0; r++) { cols = (aoa[r] || []).map((h, i) => isCodeHeader(h) ? i : -1).filter(i => i >= 0); if (cols.length) hr = r; }
+        if (hr >= 0) { byCol++; aoa.slice(hr + 1).forEach(r => cols.forEach(c => { const v = String(r[c] || '').trim(); if (v) codes.push(v); })); }
+        else { loose = true; aoa.forEach(r => r.forEach(v => { const t = String(v || '').trim(); if (t) codes.push(...codeWords(t)); })); }
+      });
+      return { codes, loose, how: byCol ? 'SALESCODE column' : 'all cells' };
+    }
+    // anything else (e.g. old .doc): read the readable text out of it
+    const bytes = new Uint8Array(buf);
+    return { codes: codeWords(new TextDecoder('latin1').decode(bytes) + ' ' + new TextDecoder('utf-16le').decode(bytes)), loose: true, how: 'text found in the file' };
+  }
+  const uniqCodes = a => { const s = new Set(); return a.map(x => String(x).toUpperCase().replace(/\s+/g, '')).filter(x => x && !s.has(x) && s.add(x)); };
+
+  function purgeSteps() {   // progress across the three databases
+    return `<div class="psteps">${DB_TABS.map(([k, l]) => { const d = purge.done[k];
+      return `<span class="pstep ${d ? 'done' : purge.db === k && purge.stage !== 'next' && purge.stage !== 'end' ? 'now' : ''}">${esc(l)}${d ? ` · ${d.skipped ? 'skipped' : '✓ ' + fmtN(d.n) + ' purged'}` : ''}</span>`; }).join('')}</div>`;
+  }
   function toolPurge() {
     const p = purge;
-    body().innerHTML = `<section class="block"><h3>1 · Which database?</h3>
+    if (p.stage === 'next' || p.stage === 'end') return drawPurgeNext();
+    const fresh = !Object.keys(p.done).length;
+    body().innerHTML = fresh ? `<section class="block"><h3>1 · Which database?</h3>
         <div class="seg">${DB_TABS.map(([k, l]) => `<button data-pdb="${k}" class="${p.db === k ? 'on' : ''}">${l}</button>`).join('')}</div></section>
-      <section class="block" ${p.db ? '' : 'hidden'}><h3>2 · Sales Codes to purge</h3>
-        <p class="hint" style="margin-top:0">Upload an Excel or CSV file with a <b>SALESCODE</b> column (or the codes in the first column), or paste the codes below — one per line.</p>
-        <input type="file" id="pFile" accept=".xlsx,.xls,.csv,.txt">
-        ${p.file ? `<div class="hint ok">✓ ${esc(p.file)} — ${fmtN(p.codes.length)} code(s) read</div>` : ''}
-        <label for="pPaste">…or paste codes</label><textarea id="pPaste" rows="4" placeholder="ABC1234526&#10;XYZ0001226">${p.file ? '' : esc(p.codes.join('\n'))}</textarea>
-        <button class="btn dark" id="pPrev" style="max-width:260px;margin-top:12px">Check the list</button></section>
-      <div id="pResult"></div>`;
+      <section class="block" ${p.db ? '' : 'hidden'}><h3>2 · List of Sales Codes to purge</h3>
+        <p class="hint" style="margin-top:0">Upload the list in <b>any format</b> — Excel, CSV, Word, PowerPoint, PDF or text. The system finds the Sales Codes in it.
+          Best: a column named <b>SALESCODE</b> (then only that column is used). You can also paste the codes.</p>
+        <input type="file" id="pFile">
+        ${p.src ? `<div class="hint ok">✓ ${esc(p.src)} — ${fmtN(p.codes.length)} possible Sales Code${p.codes.length === 1 ? '' : 's'} read (${esc(p.how)})</div>` : ''}
+        <label for="pPaste">…or paste codes</label><textarea id="pPaste" rows="4" placeholder="ABC1234526&#10;XYZ0001226">${p.src ? '' : esc(p.codes.join('\n'))}</textarea>
+        <button class="btn dark" id="pPrev" style="max-width:300px;margin-top:12px">Match with ${esc(dbLabel(p.db))}</button></section>
+      <div id="pResult"></div>`
+      : `${purgeSteps()}<div class="notice">Same list: <b>${esc(p.src || 'pasted codes')}</b> · ${fmtN(p.codes.length)} code(s)</div><div id="pResult"></div>`;
     view.querySelectorAll('[data-pdb]').forEach(b => b.onclick = () => { p.db = b.dataset.pdb; p.preview = null; toolPurge(); });
-    if (!p.db) return;
+    if (p.preview) return drawPurgePreview();
+    if (!p.db || !fresh) return;
     $('#pFile').onchange = async e => {
       const f = e.target.files[0]; if (!f) return;
+      const box = $('#pFile'); box.disabled = true; toast('Reading ' + f.name + '…', 2500);
       try {
-        await loadXlsx();
-        const wb = XLSX.read(await f.arrayBuffer(), { type: 'array' });
-        const aoa = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: false, defval: '' });
-        let ci = (aoa[0] || []).findIndex(h => /SALES\s*CODE/i.test(String(h)));
-        const start = ci >= 0 ? 1 : 0; if (ci < 0) ci = 0;
-        p.codes = aoa.slice(start).map(r => String(r[ci] || '').trim()).filter(Boolean);
-        p.file = f.name; p.preview = null; toolPurge();
-      } catch (err) { toast('Could not read the file: ' + err.message, 5000); }
+        const r = await readCodesFromFile(f), codes = uniqCodes(r.codes);
+        if (!codes.length) throw new Error('No Sales Codes were found in this file.');
+        if (codes.length > PURGE_MAX) throw new Error(`The file has ${fmtN(codes.length)} possible codes — the limit is ${fmtN(PURGE_MAX)}. Split the file, or use a SALESCODE column.`);
+        Object.assign(p, { codes, src: f.name, loose: r.loose, how: r.how, preview: null, previews: {} }); toolPurge();
+      } catch (err) { toast('Could not read the file: ' + err.message, 6000); box.disabled = false; box.value = ''; }
     };
-    $('#pPaste').oninput = e => { p.file = ''; p.codes = e.target.value.split(/[\s,;]+/).map(x => x.trim()).filter(Boolean); };
-    $('#pPrev').onclick = async () => {
-      if (!p.codes.length) return toast('Add the Sales Codes first.');
-      const b = $('#pPrev'); b.disabled = true; b.innerHTML = '<span class="spinner"></span>Checking…';
-      try { p.preview = await api('adminPurgePreview', { token: session.portalToken, db: p.db, codes: p.codes }, 120000); drawPurgePreview(); }
-      catch (e) { toast(e.message, 5000); } finally { b.disabled = false; b.innerHTML = 'Check the list'; }
-    };
-    if (p.preview) drawPurgePreview();
+    $('#pPaste').oninput = e => { Object.assign(p, { src: '', loose: false, how: 'pasted', preview: null, previews: {} }); p.codes = uniqCodes(e.target.value.split(/[\s,;]+/)); };
+    $('#pPrev').onclick = () => { if (!p.codes.length) return toast('Add the Sales Codes first.'); purgeCheck($('#pPrev')); };
+  }
+  async function purgeCheck(btn) {
+    const p = purge, label = btn ? btn.innerHTML : '';
+    if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>Matching…'; }
+    try { p.preview = p.previews[p.db] || await api('adminPurgePreview', { token: session.portalToken, db: p.db, codes: p.codes }, 120000); p.stage = 'confirm'; drawPurgePreview(); }
+    catch (e) { toast(e.message, 5000); if (btn) { btn.disabled = false; btn.innerHTML = label; } }
   }
   function drawPurgePreview() {
-    const r = purge.preview, n = r.purge.length;
-    $('#pResult').innerHTML = `<section class="block"><h3>3 · Check and confirm</h3>
+    const p = purge, r = p.preview, n = r.purge.length;
+    const nf = r.notFound.length;
+    $('#pResult').innerHTML = `<section class="block"><h3>${Object.keys(p.done).length ? '' : '3 · '}Matched with ${esc(r.label)}</h3>
+      <div class="pbig ${n ? '' : 'none'}"><b>${fmtN(n)}</b> ${esc(r.label)} record${n === 1 ? '' : 's'} will be tagged <b>PURGED</b></div>
       <div class="stats">
-        <div class="stat dth"><div class="lbl">Will be tagged PURGED</div><div class="num">${fmtN(n)}</div><div class="sub">found in ${esc(r.label)}</div></div>
         <div class="stat"><div class="lbl">Already purged</div><div class="num">${fmtN(r.already.length)}</div><div class="sub">no change</div></div>
-        <div class="stat"><div class="lbl">Not found</div><div class="num">${fmtN(r.notFound.length)}</div><div class="sub">not in ${esc(r.label)}</div></div>
-        <div class="stat"><div class="lbl">Repeated in the list</div><div class="num">${fmtN(r.repeated.length)}</div><div class="sub">counted once</div></div>
+        ${p.loose ? `<div class="stat"><div class="lbl">Other words in the file</div><div class="num">${fmtN(nf)}</div><div class="sub">not Sales Codes of ${esc(r.label)} · ignored</div></div>`
+                  : `<div class="stat"><div class="lbl">Not in ${esc(r.label)}</div><div class="num">${fmtN(nf)}</div><div class="sub">may be in another database</div></div>`}
       </div>
-      ${r.notFound.length ? `<p class="hint bad" style="margin-top:12px">Not found: ${r.notFound.slice(0, 60).map(esc).join(', ')}${r.notFound.length > 60 ? ' …' : ''}</p>` : ''}
+      ${!p.loose && nf ? `<p class="hint" style="margin-top:12px">Not in ${esc(r.label)}: ${r.notFound.slice(0, 60).map(esc).join(', ')}${nf > 60 ? ' …' : ''}</p>` : ''}
       ${n ? `<div class="expand scroll" style="max-height:340px"><table class="data"><thead><tr><th>Sales Code</th><th>Partner</th><th>Name</th><th>Status now</th></tr></thead><tbody>
           ${r.purge.slice(0, 500).map(x => `<tr><td><b>${esc(x.code)}</b></td><td>${esc(x.partner)}</td><td>${esc(x.name)}</td><td>${esc(x.status)}</td></tr>`).join('')}</tbody></table></div>
         ${n > 500 ? `<p class="hint">Showing the first 500 of ${fmtN(n)}.</p>` : ''}
-        <button class="btn" id="pApply" style="max-width:360px;margin-top:14px">Tag ${fmtN(n)} record${n === 1 ? '' : 's'} as PURGED</button>` : '<div class="notice warn" style="margin-top:12px">Nothing to purge in this list.</div>'}
+        <p class="hint">Please check the list above before you continue.</p>` : `<div class="notice warn" style="margin-top:12px">None of the codes are active in ${esc(r.label)} — nothing to purge here.</div>`}
+      <div class="pact">
+        ${n ? `<button class="btn" id="pApply">Proceed — tag ${fmtN(n)} as PURGED</button>` : ''}
+        <button class="btn ghost" id="pSkip">${n ? 'Don\'t purge ' + esc(r.label) : 'Next'}</button>
+        ${Object.keys(p.done).length ? '' : '<button class="linkish" id="pBack">‹ Change the list</button>'}</div>
     </section>`;
+    const back = $('#pBack'); if (back) back.onclick = () => { p.preview = null; p.previews = {}; p.stage = 'start'; toolPurge(); };
+    $('#pSkip').onclick = () => { p.done[p.db] = { n: 0, skipped: !!n }; p.preview = null; p.stage = 'next'; toolPurge(); };
     const a = $('#pApply'); if (a) a.onclick = async () => {
       if (!confirm(`Tag ${n} ${r.label} record(s) as PURGED with today's date?\n\nThis is recorded in the ADMIN LOG.`)) return;
-      a.disabled = true; a.innerHTML = '<span class="spinner"></span>Purging…';
+      a.disabled = true; a.innerHTML = '<span class="spinner"></span>Purging…'; $('#pSkip').disabled = true;
       try {
-        const res = await api('adminPurgeApply', { token: session.portalToken, db: purge.db, codes: purge.codes }, 300000);
-        ['ACTIVE', 'PURGED'].forEach(s2 => { delete DBC[purge.db + ':' + s2]; IDB.put(purge.db + ':' + s2, null); });
+        const res = await api('adminPurgeApply', { token: session.portalToken, db: p.db, codes: p.codes }, 300000);
+        ['ACTIVE', 'PURGED'].forEach(s2 => { delete DBC[p.db + ':' + s2]; IDB.put(p.db + ':' + s2, null); });
         dash = null;
-        $('#pResult').innerHTML = `<div class="notice ok"><b>Done</b>${esc(res.message)}</div>`;
-        purge.codes = []; purge.file = ''; purge.preview = null;
-      } catch (e) { toast(e.message, 6000); a.disabled = false; a.innerHTML = `Tag ${fmtN(n)} records as PURGED`; }
+        p.done[p.db] = { n: res.purged, msg: res.message }; p.preview = null; p.stage = 'next'; toolPurge();
+      } catch (e) { toast(e.message, 6000); a.disabled = false; $('#pSkip').disabled = false; a.innerHTML = `Proceed — tag ${fmtN(n)} as PURGED`; }
     };
+  }
+  // after each database: continue with the same list on another one, or end
+  async function drawPurgeNext() {
+    const p = purge, left = DB_TABS.filter(([k]) => !p.done[k]);
+    const last = p.done[p.db];
+    const lastMsg = last ? (last.msg ? `<div class="notice ok"><b>Done</b>${esc(last.msg)}</div>` : `<div class="notice">${esc(dbLabel(p.db))}: ${last.skipped ? 'not purged' : 'nothing to purge'}.</div>`) : '';
+    const summary = `<section class="block"><h3>Purge finished</h3>${purgeSteps()}
+        <p class="hint">Total tagged PURGED: <b>${fmtN(Object.values(p.done).reduce((a, d) => a + d.n, 0))}</b>. Everything is recorded in the ADMIN LOG.</p>
+        <button class="btn dark" id="pNew" style="max-width:260px">Purge another list</button></section>`;
+    if (p.stage === 'end' || !left.length) {
+      body().innerHTML = lastMsg + (left.length ? '' : '<div class="notice">All three databases were checked with this list.</div>') + summary;
+      $('#pNew').onclick = () => { purgeReset(); toolPurge(); }; return;
+    }
+    body().innerHTML = `${lastMsg}${purgeSteps()}<section class="block"><h3>Continue with the same list?</h3>
+      <p class="hint" style="margin-top:0">Use <b>${esc(p.src || 'the pasted codes')}</b> (${fmtN(p.codes.length)} code${p.codes.length === 1 ? '' : 's'}) on another database, or end here.</p>
+      <div class="pnext">${left.map(([k, l]) => `<button class="pick" data-next="${k}"><span>${esc(l)}</span><small id="pn-${k}"><i class="spinner"></i>matching…</small></button>`).join('')}
+        <button class="pick end" id="pEnd"><span>End</span><small>I'm done purging</small></button></div></section>`;
+    $('#pEnd').onclick = () => { p.stage = 'end'; toolPurge(); };
+    view.querySelectorAll('[data-next]').forEach(b => b.onclick = () => { p.db = b.dataset.next; p.stage = 'confirm'; p.preview = null; toolPurge(); purgeCheck(); });
+    // show how many each remaining database would purge (same list)
+    left.forEach(async ([k]) => {
+      try { const r = p.previews[k] || (p.previews[k] = await api('adminPurgePreview', { token: session.portalToken, db: k, codes: p.codes }, 120000));
+        const el = $('#pn-' + k); if (el) el.innerHTML = r.purge.length ? `<strong>${fmtN(r.purge.length)}</strong> will be purged` : 'nothing to purge';
+      } catch (e) { const el = $('#pn-' + k); if (el) el.textContent = e.message; }
+    });
   }
 
   /* ---------- Redirect a request ---------- */
@@ -668,19 +769,30 @@
   /* ---------- Floating buttons (Channel Dev / DEPT only) ---------- */
   function drawFab() {
     const f = $('#fab');
-    const on = !!session && session.user.role === 'DEPT';
-    document.body.classList.toggle('has-fab', on);
-    if (!on) { f.hidden = true; return; }
+    const dept = !!session && session.user.role === 'DEPT';
+    const dlOn = !!session && tab === 'databases' && !!dl;
+    document.body.classList.toggle('dept-fab', dept);
+    document.body.classList.toggle('has-fab', dept || dlOn);
+    if (!dept && !dlOn) { f.hidden = true; f.innerHTML = ''; return; }
     const cnt = (arr, k) => arr.filter(i => i.kind === k).length;
-    const btns = [
+    const btns = dept ? [
       ['refresh', '↻', 'Refresh', null, 'Refresh counts and this page'],
       ['apprNEW', 'New', 'New requests for approval', cnt(apprItems, 'NEW'), 'New touchpoint requests waiting for CHANNEL DEV DIST'],
       ['retNEW', 'New ↩', 'New requests returned', cnt(retItems, 'NEW'), 'New touchpoint requests returned to the requestor'],
       ['apprAMEND', 'Amend', 'Amendments for approval', cnt(apprItems, 'AMEND'), 'Amendments waiting for CHANNEL DEV DIST'],
-      ['retAMEND', 'Amend ↩', 'Amendments returned to sender', cnt(retItems, 'AMEND'), 'Amendments returned to the requestor']];
-    f.innerHTML = btns.map(([k, short, long, n, tip]) => `<button class="fb fb-${k} ${n === 0 ? 'zero' : ''}" data-fab="${k}" title="${esc(tip)}">
-        ${n == null ? `<span class="ic">${short}</span>` : `<b class="n ${n ? 'ring' : ''}">${fmtN(n)}</b>`}<span class="lb">${n == null ? long : long}</span></button>`).join('');
-    f.hidden = false;
+      ['retAMEND', 'Amend ↩', 'Amendments returned to sender', cnt(retItems, 'AMEND'), 'Amendments returned to the requestor']] : [];
+    let html = btns.map(([k, short, long, n, tip]) => `<button class="fb fb-${k} ${n === 0 ? 'zero' : ''}" data-fab="${k}" title="${esc(tip)}">
+        ${n == null ? `<span class="ic">${short}</span>` : `<b class="n ${n ? 'ring' : ''}">${fmtN(n)}</b>`}<span class="lb">${long}</span></button>`).join('');
+    if (dlOn) {
+      const n = dl.list.length, what = `${dl.D.label} · ${dbState.status === 'ACTIVE' ? 'Active' : 'Purged'}${dl.filtered ? ' · filtered' : ''}`;
+      html += `<button class="fb fb-xlsx" id="dbXlsx" ${n ? '' : 'disabled'} title="Downloads exactly the list shown on screen: ${esc(what)} — ${fmtN(n)} row(s), all columns">
+        <span class="ic xl" aria-hidden="true"><svg viewBox="0 0 24 24" width="22" height="22"><path d="M6 2.5h8l5 5v14H6z" fill="#fff" stroke="#107C41" stroke-width="1.4" stroke-linejoin="round"/>
+          <path d="M14 2.5v5h5" fill="none" stroke="#107C41" stroke-width="1.4" stroke-linejoin="round"/>
+          <path d="M8.5 11h8M8.5 14h8M8.5 17h8M12 11v6.5" stroke="#107C41" stroke-width="1.3"/></svg></span>
+        <span class="lb"><span class="t">Download database</span><small>${esc(what)} · ${fmtN(n)} row${n === 1 ? '' : 's'} as shown</small></span></button>`;
+    }
+    f.innerHTML = html; f.hidden = false;
+    const x = $('#dbXlsx'); if (x) x.onclick = () => downloadXlsx(dl.D, dl.list);
     f.querySelectorAll('[data-fab]').forEach(b => b.onclick = async () => {
       const k = b.dataset.fab;
       if (k === 'refresh') {

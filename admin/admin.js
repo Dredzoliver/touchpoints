@@ -76,16 +76,44 @@
     }
   }
   function logout(silent) {
-    session = null; store.del('adminSession'); clearInterval(timer); $('#fab').hidden = true; retItems = []; retLoaded = false; dash = null; apprItems = []; apprLoaded = false; DBC = {}; IDB.clear(); dbState.db = '';
+    session = null; navHist = []; store.del('adminSession'); clearInterval(timer); $('#fab').hidden = true; retItems = []; retLoaded = false; dash = null; apprItems = []; apprLoaded = false; DBC = {}; IDB.clear(); dbState.db = '';
     try { if (window.google && google.accounts) google.accounts.id.disableAutoSelect(); } catch (e) {}
     renderLogin(silent ? '' : 'You have signed out.');
   }
   $('#logoutBtn').onclick = () => { if (confirm('Sign out?')) logout(); };
 
   /* ---------- tabs ---------- */
-  document.querySelectorAll('#tabs [data-tab]').forEach(b => b.onclick = () => { tab = b.dataset.tab; show(); });
+  document.querySelectorAll('#tabs [data-tab]').forEach(b => b.onclick = () => goTab(b.dataset.tab));
   // On Process now tiles are counts only (not clickable) — Frederick, 25 Nov 2026
-  function goTab(t) { tab = t; show(); scrollTo(0, 0); }
+  /* Back to the previous screen (Frederick, 27 Nov 2026): every move between tabs / Admin tools is remembered, so the
+     ‹ Back button and the browser's / phone's Back button return to the screen before (Dashboard if there is none). */
+  let navHist = [];
+  const TAB_NAMES = { dashboard: 'Dashboard', approvals: 'Approvals', returned: 'Returned', search: 'Search request', databases: 'Databases', tools: 'Admin tools' };
+  function goTab(t, tool) {
+    const same = tab === t && (t !== 'tools' || !tool || tool === toolsSection);
+    if (!same) {
+      navHist.push({ tab, tool: toolsSection });
+      if (navHist.length > 50) navHist.shift();
+      try { history.pushState({ tpAdmin: navHist.length }, ''); } catch (e) {}
+    }
+    tab = t; if (tool) toolsSection = tool; show(); scrollTo(0, 0);
+  }
+  function backTo() {
+    const p = navHist[navHist.length - 1];
+    if (!p) return 'Dashboard';
+    return p.tab === 'tools' ? 'Admin tools · ' + ((TOOL_TABS.find(x => x[0] === p.tool) || [, ''])[1]) : TAB_NAMES[p.tab] || 'previous screen';
+  }
+  function goBack() {   // the ‹ Back button: use the browser history so both Back buttons stay in step
+    if (navHist.length) { try { history.back(); return; } catch (e) {} }
+    stepBack();
+  }
+  function stepBack() {
+    const p = navHist.pop() || { tab: 'dashboard' };
+    tab = p.tab; if (p.tool) toolsSection = p.tool; show(); scrollTo(0, 0);
+  }
+  window.addEventListener('popstate', () => { if (session && navHist.length) stepBack(); });
+  const backBtn = () => tab === 'dashboard' && !navHist.length ? '' : `<button class="backbtn" id="navBack">‹ Back to ${esc(backTo())}</button>`;
+  view.addEventListener('click', e => { if (e.target.closest('#navBack')) goBack(); });
   let dl = null;   // what the floating Download database button exports (Databases tab, list on screen)
   function show() {
     dl = null; drawFab();
@@ -175,7 +203,7 @@
   function drawApprovals() {
     const n = k => apprItems.filter(i => k === 'ALL' || i.kind === k).length;
     const list = apprItems.filter(i => apprFilter === 'ALL' || i.kind === apprFilter);
-    view.innerHTML = `<div class="bar"><h2>Waiting for ${esc(session.user.name)}</h2><button class="refresh" id="apprRefresh">↻ Refresh</button></div>
+    view.innerHTML = `${backBtn()}<div class="bar"><h2>Waiting for ${esc(session.user.name)}</h2><button class="refresh" id="apprRefresh">↻ Refresh</button></div>
       <div class="chips">${[['ALL', 'All'], ['NEW', 'New touchpoints'], ['AMEND', 'Amendments']].map(([k, l]) =>
         `<button class="chip ${apprFilter === k ? 'on' : ''}" data-f="${k}">${l}<b class="${n(k) ? '' : 'zero'}">${n(k)}</b></button>`).join('')}</div>
       ${list.length ? `<div class="list">${list.map(i => `<button class="item ${i.kind === 'AMEND' ? 'amend' : ''}" data-id="${esc(i.id)}">
@@ -242,7 +270,7 @@
   function rememberSearch(id) { try { localStorage.setItem(recentKey, JSON.stringify([id].concat(recentSearches().filter(x => x !== id)).slice(0, 8))); } catch (e) {} }
   function renderSearch(val) {
     const rec = recentSearches();
-    view.innerHTML = `<div class="card find-card"><h2>Search a request</h2>
+    view.innerHTML = `${backBtn()}<div class="card find-card"><h2>Search a request</h2>
       <p class="hint" style="margin-top:0">Type the request reference number to see all its details, the approval flow and where it is now.</p>
       <form id="findForm" class="find-row" autocomplete="off">
         <input type="text" id="findId" placeholder="e.g. TPR-2026-00021 or 21" value="${esc(val || '')}" autocapitalize="characters" spellcheck="false">
@@ -328,7 +356,7 @@
   function renderDbChooser() {
     dl = null; drawFab();
     const tp = dash && dash.touchpoints;
-    view.innerHTML = `<div class="head"><h2>Databases</h2></div>
+    view.innerHTML = `${backBtn()}<div class="head"><h2>Databases</h2></div>
       <p class="hint" style="margin:-6px 0 14px">Choose which database to open. Only that one is loaded.</p>
       <div class="choose">${DB_TABS.map(([k, l]) => `<button data-pick="${k}" class="pick ${k.toLowerCase()}"><span>${l}</span>
           ${tp && tp[k] ? `<b>${fmtN(tp[k].active)}</b><small>active · ${fmtN(tp[k].purged)} purged</small>` : '<small>Active and Purged lists</small>'}</button>`).join('')}</div>`;
@@ -467,10 +495,10 @@
   function renderTools() {
     const mine = TOOL_TABS.filter(t => session.user.role === 'ADMIN' || t[2]);   // DEPT: only the tools marked for DEPT
     if (!mine.some(t => t[0] === toolsSection)) toolsSection = mine[0][0];
-    view.innerHTML = `<div class="head"><h2>Admin tools</h2></div>
+    view.innerHTML = `${backBtn()}<div class="head"><h2>Admin tools</h2></div>
       <div class="seg">${mine.map(([k, l]) => `<button data-tool="${k}" class="${toolsSection === k ? 'on' : ''}">${l}</button>`).join('')}</div>
       <div id="toolBody"></div>`;
-    view.querySelectorAll('[data-tool]').forEach(b => b.onclick = () => { toolsSection = b.dataset.tool; renderTools(); });
+    view.querySelectorAll('[data-tool]').forEach(b => b.onclick = () => goTab('tools', b.dataset.tool));
     ({ purge: toolPurge, restore: toolRestore, redirect: toolRedirect, tables: toolTables, status: toolStatus })[toolsSection]();
   }
   const body = () => $('#toolBody');
@@ -860,7 +888,7 @@
   function drawReturned() {
     const n = k => retItems.filter(i => k === 'ALL' || i.kind === k).length;
     const list = retItems.filter(i => retFilter === 'ALL' || i.kind === retFilter);
-    view.innerHTML = `<div class="bar"><h2>Returned to requestor</h2><button class="refresh" id="retRefresh">↻ Refresh</button></div>
+    view.innerHTML = `${backBtn()}<div class="bar"><h2>Returned to requestor</h2><button class="refresh" id="retRefresh">↻ Refresh</button></div>
       <p class="hint" style="margin:-6px 0 12px">Requests sent back for correction and not yet resent. Longest waiting first — follow up with the TSM.</p>
       <div class="chips">${[['ALL', 'All'], ['NEW', 'New touchpoints'], ['AMEND', 'Amendments']].map(([k, l]) =>
         `<button class="chip ${retFilter === k ? 'on' : ''}" data-rf="${k}">${l}<b class="${n(k) ? '' : 'zero'}">${n(k)}</b></button>`).join('')}</div>

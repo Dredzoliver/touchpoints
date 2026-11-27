@@ -463,7 +463,7 @@
 
   /* ======================= ADMIN TOOLS (ADMIN only) ======================= */
   let toolsSection = 'purge';
-  const TOOL_TABS = [['purge', 'Bulk purge', true], ['redirect', 'Redirect a request', true], ['tables', 'Edit tables'], ['status', 'System status']];   // true = DEPT may use
+  const TOOL_TABS = [['purge', 'Bulk purge', true], ['restore', 'Restore purged', true], ['redirect', 'Redirect a request', true], ['tables', 'Edit tables'], ['status', 'System status']];   // true = DEPT may use
   function renderTools() {
     const mine = TOOL_TABS.filter(t => session.user.role === 'ADMIN' || t[2]);   // DEPT: only the tools marked for DEPT
     if (!mine.some(t => t[0] === toolsSection)) toolsSection = mine[0][0];
@@ -471,7 +471,7 @@
       <div class="seg">${mine.map(([k, l]) => `<button data-tool="${k}" class="${toolsSection === k ? 'on' : ''}">${l}</button>`).join('')}</div>
       <div id="toolBody"></div>`;
     view.querySelectorAll('[data-tool]').forEach(b => b.onclick = () => { toolsSection = b.dataset.tool; renderTools(); });
-    ({ purge: toolPurge, redirect: toolRedirect, tables: toolTables, status: toolStatus })[toolsSection]();
+    ({ purge: toolPurge, restore: toolRestore, redirect: toolRedirect, tables: toolTables, status: toolStatus })[toolsSection]();
   }
   const body = () => $('#toolBody');
 
@@ -621,6 +621,83 @@
         const el = $('#pn-' + k); if (el) el.innerHTML = r.purge.length ? `<strong>${fmtN(r.purge.length)}</strong> will be purged` : 'nothing to purge';
       } catch (e) { const el = $('#pn-' + k); if (el) el.textContent = e.message; }
     });
+  }
+
+  /* ---------- Restore purged touchpoints to ACTIVE (Frederick, 27 Nov 2026; ADMIN and DEPT) ----------
+     Choose a database → type/paste the Sales Codes or upload a file with a SALESCODE column → see which PURGED records will be
+     restored → reason → Restore. Codes that already have an ACTIVE record are skipped. Recorded in the ADMIN LOG. */
+  const rest = { db: '', codes: [], src: '', how: '', preview: null, result: null, matched: false };
+  function restoreReset() { Object.assign(rest, { db: '', codes: [], src: '', how: '', preview: null, result: null, matched: false }); }
+  function toolRestore() {
+    const p = rest;
+    if (p.result) {
+      body().innerHTML = `<div class="notice ${p.matched ? 'ok' : 'warn'}"><b>${p.matched ? 'Done' : 'Restored — UPDATE TABLES pending'}</b>${esc(p.result)}</div>
+        <p class="hint">Recorded in the ADMIN LOG.</p>
+        <button class="btn dark" id="rNew" style="max-width:260px">Restore another list</button>`;
+      $('#rNew').onclick = () => { restoreReset(); toolRestore(); }; return;
+    }
+    body().innerHTML = `<section class="block"><h3>1 · Which database?</h3>
+        <div class="seg">${DB_TABS.map(([k, l]) => `<button data-rdb="${k}" class="${p.db === k ? 'on' : ''}">${l}</button>`).join('')}</div></section>
+      <section class="block" ${p.db ? '' : 'hidden'}><h3>2 · Sales Codes to restore to ACTIVE</h3>
+        <p class="hint" style="margin-top:0">Type or paste one or more Sales Codes, or upload an Excel, CSV or Word file. 🔒 A file must have a column headed <b>SALESCODE</b> — only that column is read.</p>
+        <label for="rPaste">Sales Code(s)</label><textarea id="rPaste" rows="3" placeholder="ABC1234526&#10;XYZ0001226">${p.src ? '' : esc(p.codes.join('\n'))}</textarea>
+        <label for="rFile">…or upload a list</label><input type="file" id="rFile" accept=".xlsx,.xlsm,.xlsb,.xls,.ods,.csv,.tsv,.txt,.docx,.docm,.dotx"><div id="rErr"></div>
+        ${p.src ? `<div class="hint ok">✓ ${esc(p.src)} — ${fmtN(p.codes.length)} Sales Code${p.codes.length === 1 ? '' : 's'} read from the ${esc(p.how)}</div>` : ''}
+        <button class="btn dark" id="rPrev" style="max-width:300px;margin-top:12px">Find in ${esc(dbLabel(p.db))} · Purged</button></section>
+      <div id="rResult"></div>`;
+    view.querySelectorAll('[data-rdb]').forEach(b => b.onclick = () => { p.db = b.dataset.rdb; p.preview = null; toolRestore(); });
+    if (!p.db) return;
+    if (p.preview) drawRestorePreview();
+    $('#rFile').onchange = async e => {
+      const f = e.target.files[0]; if (!f) return;
+      $('#rFile').disabled = true; toast('Reading ' + f.name + '…', 2500);
+      try {
+        const r = await readCodesFromFile(f), codes = uniqCodes(r.codes);
+        if (!codes.length) throw new Error('No Sales Codes were found in this file.');
+        if (codes.length > PURGE_MAX) throw new Error(`The file has ${fmtN(codes.length)} codes — the limit is ${fmtN(PURGE_MAX)}.`);
+        Object.assign(p, { codes, src: f.name, how: r.how, preview: null }); toolRestore();
+      } catch (err) { Object.assign(p, { codes: [], src: '', how: '', preview: null }); toolRestore(); $('#rErr').innerHTML = `<div class="notice bad"><b>File rejected</b>${esc(err.message)}</div>`; }
+    };
+    $('#rPaste').oninput = e => { Object.assign(p, { src: '', how: 'pasted', preview: null }); p.codes = uniqCodes(e.target.value.split(/[\s,;]+/)); $('#rResult').innerHTML = ''; };
+    $('#rPrev').onclick = async () => {
+      if (!p.codes.length) return toast('Type or upload the Sales Codes first.');
+      const btn = $('#rPrev'), label = btn.innerHTML; btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>Finding…';
+      try { p.preview = await api('adminRestorePreview', { token: session.portalToken, db: p.db, codes: p.codes }, 120000); drawRestorePreview(); }
+      catch (e) { toast(e.message, 5000); }
+      btn.disabled = false; btn.innerHTML = label;
+    };
+  }
+  function drawRestorePreview() {
+    const p = rest, r = p.preview, n = r.restore.length, nf = r.notFound.length;
+    $('#rResult').innerHTML = `<section class="block"><h3>3 · Found in ${esc(r.label)}</h3>
+      <div class="pbig ${n ? '' : 'none'}"><b>${fmtN(n)}</b> purged ${esc(r.label)} record${n === 1 ? '' : 's'} will be restored to <b>ACTIVE</b></div>
+      ${n ? `<p class="hint" style="margin-top:0">The matching record in UPDATE TABLES is restored too (taken off the PURGED tab and put back in the active tab).</p>` : ''}
+      <div class="stats">
+        <div class="stat"><div class="lbl">Already active</div><div class="num">${fmtN(r.active.length)}</div><div class="sub">no change</div></div>
+        <div class="stat"><div class="lbl">Not in ${esc(r.label)}</div><div class="num">${fmtN(nf)}</div><div class="sub">may be in another database</div></div>
+      </div>
+      ${r.active.length ? `<p class="hint" style="margin-top:12px">Already active: ${r.active.slice(0, 60).map(x => esc(x.code)).join(', ')}${r.active.length > 60 ? ' …' : ''}</p>` : ''}
+      ${nf ? `<p class="hint">Not in ${esc(r.label)}: ${r.notFound.slice(0, 60).map(esc).join(', ')}${nf > 60 ? ' …' : ''}</p>` : ''}
+      ${n ? `<div class="expand scroll" style="max-height:340px"><table class="data"><thead><tr><th>Sales Code</th><th>Partner</th><th>Name</th><th>Purged on</th></tr></thead><tbody>
+          ${r.restore.slice(0, 500).map(x => `<tr><td><b>${esc(x.code)}</b></td><td>${esc(x.partner)}</td><td>${esc(x.name)}</td><td>${esc(x.purged || '—')}</td></tr>`).join('')}</tbody></table></div>
+        ${n > 500 ? `<p class="hint">Showing the first 500 of ${fmtN(n)}.</p>` : ''}
+        <label for="rWhy">Reason for restoring <span class="req">REQUIRED</span></label>
+        <textarea id="rWhy" rows="2" maxlength="300" placeholder="e.g. Purged by mistake / partner reactivated the store"></textarea>
+        <div class="pact"><button class="btn" id="rApply">Restore ${fmtN(n)} to ACTIVE</button></div>`
+      : `<div class="notice warn" style="margin-top:12px">None of these codes are purged in ${esc(r.label)} — nothing to restore.</div>`}
+    </section>`;
+    const a = $('#rApply'); if (!a) return;
+    a.onclick = async () => {
+      const why = $('#rWhy').value.trim();
+      if (why.length < 5) { $('#rWhy').classList.add('missing'); $('#rWhy').focus(); return toast('Please give the reason for restoring.'); }
+      if (!confirm(`Restore ${n} ${r.label} record(s) to ACTIVE?\n\nThe purge date is cleared, and the matching record in UPDATE TABLES is restored too. This is recorded in the ADMIN LOG.`)) return;
+      a.disabled = true; a.innerHTML = '<span class="spinner"></span>Restoring here and in UPDATE TABLES…';
+      try {
+        const res = await api('adminRestoreApply', { token: session.portalToken, db: p.db, codes: r.restore.map(x => x.code), reason: why }, 300000);
+        ['ACTIVE', 'PURGED'].forEach(s2 => { delete DBC[p.db + ':' + s2]; IDB.put(p.db + ':' + s2, null); });
+        dash = null; p.result = res.message; p.matched = !!res.matched; toolRestore();
+      } catch (e) { toast(e.message, 6000); a.disabled = false; a.innerHTML = `Restore ${fmtN(n)} to ACTIVE`; }
+    };
   }
 
   /* ---------- Redirect a request ---------- */

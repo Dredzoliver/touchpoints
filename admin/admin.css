@@ -201,3 +201,6 @@ body.dept-fab #dashRefresh, body.dept-fab #apprRefresh, body.dept-fab #dbRefresh
 .st-process { border-left-color:#FBB040; background:#FFFBF2; } .st-returned { border-left-color:#FF8A92; }
 .st-rejected { border-left-color:#2B2B2B; } .st-approved { border-left-color:#FF0013; } .st-action { border-left-color:#FF0013; background:#FFF0F1; }
 .st-cancelled { border-left-color:#9A9A9A; background:#F7F7F7; }
+/* Restore purged (27 Nov 2026) */
+.req { display:inline-block; font-size:11px; font-weight:800; padding:2px 8px; margin-left:6px; border-radius:99px; background:var(--brand); color:#fff; vertical-align:middle; }
+textarea.missing { border-color:var(--brand) !important; background:#FFF5F5; }
